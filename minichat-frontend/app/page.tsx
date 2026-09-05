@@ -35,7 +35,7 @@ export default function Home() {
     async function loadMessages() {
       try {
         const response = await fetch(
-          "http://127.0.0.1:8000/messages"
+         `${process.env.NEXT_PUBLIC_API_URL}/messages`
         );
 
         const data: Message[] = await response.json();
@@ -73,7 +73,7 @@ export default function Home() {
     setConnectionStatus("Connecting...");
 
     const ws = new WebSocket(
-      `ws://127.0.0.1:8000/ws/${currentUser}`
+      `${process.env.NEXT_PUBLIC_WS_URL}/ws/${currentUser}`
     );
 
     socketRef.current = ws;
