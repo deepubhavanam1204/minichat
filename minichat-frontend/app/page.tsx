@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -42,13 +43,6 @@ export default function Home() {
 
         if (!cancelled) {
           setMessages(data);
-
-          setTimeout(() => {
-            if (messagesContainerRef.current) {
-              messagesContainerRef.current.scrollTop =
-                messagesContainerRef.current.scrollHeight;
-            }
-          }, 0);
         }
       } catch (error) {
         console.log("Failed to load messages:", error);
@@ -83,15 +77,6 @@ export default function Home() {
 
         return [...previousMessages, newMessage];
       });
-
-      if (shouldScrollToBottom.current) {
-        setTimeout(() => {
-          if (messagesContainerRef.current) {
-            messagesContainerRef.current.scrollTop =
-              messagesContainerRef.current.scrollHeight;
-          }
-        }, 0);
-      }
     };
 
     ws.onerror = () => {
@@ -121,6 +106,16 @@ export default function Home() {
       }
     };
   }, [currentUser]);
+
+  useEffect(() => {
+    if (
+      messagesContainerRef.current &&
+      shouldScrollToBottom.current
+    ) {
+      messagesContainerRef.current.scrollTop =
+        messagesContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
 
   function handleScroll() {
     const container = messagesContainerRef.current;
@@ -171,11 +166,25 @@ export default function Home() {
     }
 
     const receiver = currentUser === "A" ? "B" : "A";
+    const messageContent = message.trim();
+
+    const tempMessage: Message = {
+      id: Date.now(),
+      sender: currentUser,
+      receiver,
+      content: messageContent,
+      created_at: new Date().toISOString()
+    };
+
+    setMessages((previousMessages) => [
+      ...previousMessages,
+      tempMessage
+    ]);
 
     const chatMessage = {
       sender: currentUser,
       receiver,
-      content: message.trim()
+      content: messageContent
     };
 
     socket.send(JSON.stringify(chatMessage));
@@ -324,3 +333,4 @@ export default function Home() {
     </main>
   );
 }
+
