@@ -14,7 +14,7 @@ type Message = {
 };
 
 export default function Home() {
-  const [currentUser, setCurrentUser] = useState<User>("A");
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [connected, setConnected] = useState(false);
@@ -27,7 +27,7 @@ export default function Home() {
   const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
 
   useEffect(() => {
-    if (!API_URL || !WS_URL) {
+    if (!currentUser || !API_URL || !WS_URL) {
       return;
     }
 
@@ -102,6 +102,7 @@ export default function Home() {
     return () => {
       socket.close();
       socketRef.current = null;
+      setConnected(false);
     };
   }, [currentUser, API_URL, WS_URL]);
 
@@ -122,6 +123,11 @@ export default function Home() {
       element.clientHeight;
 
     shouldScrollToBottom.current = distanceFromBottom < 100;
+  }
+
+  function selectUser(user: User) {
+    setMessages([]);
+    setCurrentUser(user);
   }
 
   function sendMessage() {
@@ -180,7 +186,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gray-100 p-4 text-gray-900">
-      <div className="mx-auto flex h-[90vh] max-w-2xl flex-col rounded-xl bg-white shadow-lg">
+      <div className="mx-auto flex h-[90vh] max-w-2xl flex-col rounded-xl border-2 border-black bg-white shadow-lg">
         <div className="border-b p-4">
           <h1 className="text-2xl font-bold text-gray-900">
             MiniChat
@@ -188,7 +194,7 @@ export default function Home() {
 
           <div className="mt-3 flex items-center gap-3">
             <button
-              onClick={() => setCurrentUser("A")}
+              onClick={() => selectUser("A")}
               className={`rounded-lg border px-4 py-2 ${
                 currentUser === "A"
                   ? "bg-blue-500 text-white"
@@ -199,7 +205,7 @@ export default function Home() {
             </button>
 
             <button
-              onClick={() => setCurrentUser("B")}
+              onClick={() => selectUser("B")}
               className={`rounded-lg border px-4 py-2 ${
                 currentUser === "B"
                   ? "bg-blue-500 text-white"
@@ -209,13 +215,15 @@ export default function Home() {
               User B
             </button>
 
-            <span
-              className={`text-sm font-medium ${
-                connected ? "text-green-600" : "text-red-600"
-              }`}
-            >
-              {connected ? "Connected" : "Disconnected"}
-            </span>
+            {currentUser && (
+              <span
+                className={`text-sm font-medium ${
+                  connected ? "text-green-600" : "text-red-600"
+                }`}
+              >
+                {connected ? "Connected" : "Disconnected"}
+              </span>
+            )}
           </div>
         </div>
 
@@ -223,42 +231,48 @@ export default function Home() {
           className="flex-1 overflow-y-auto p-4"
           onScroll={handleScroll}
         >
-          <div className="flex flex-col gap-3">
-            {messages.map((msg) => {
-              const isMine = msg.sender === currentUser;
+          {!currentUser ? (
+            <div className="flex h-full items-center justify-center text-gray-500">
+              Choose User A or User B to start chatting
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {messages.map((msg) => {
+                const isMine = msg.sender === currentUser;
 
-              return (
-                <div
-                  key={msg.id}
-                  className={`flex ${
-                    isMine ? "justify-end" : "justify-start"
-                  }`}
-                >
+                return (
                   <div
-                    className={`max-w-[75%] rounded-xl px-4 py-2 ${
-                      isMine
-                        ? "bg-blue-500 text-white"
-                        : "bg-gray-200 text-gray-900"
+                    key={msg.id}
+                    className={`flex ${
+                      isMine ? "justify-end" : "justify-start"
                     }`}
                   >
-                    <div>{msg.content}</div>
-
                     <div
-                      className={`mt-1 text-xs ${
+                      className={`max-w-[75%] rounded-xl px-4 py-2 ${
                         isMine
-                          ? "text-blue-100"
-                          : "text-gray-500"
+                          ? "bg-blue-500 text-white"
+                          : "bg-gray-200 text-gray-900"
                       }`}
                     >
-                      {formatTime(msg.created_at)}
+                      <div>{msg.content}</div>
+
+                      <div
+                        className={`mt-1 text-xs ${
+                          isMine
+                            ? "text-blue-100"
+                            : "text-gray-500"
+                        }`}
+                      >
+                        {formatTime(msg.created_at)}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
 
-            <div ref={messagesEndRef} />
-          </div>
+              <div ref={messagesEndRef} />
+            </div>
+          )}
         </div>
 
         <div className="border-t p-4">
@@ -271,13 +285,19 @@ export default function Home() {
                   sendMessage();
                 }
               }}
-              placeholder="Type a message..."
-              className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-500"
+              disabled={!currentUser}
+              placeholder={
+                currentUser
+                  ? "Type a message..."
+                  : "Choose a user first..."
+              }
+              className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-500 disabled:bg-gray-100"
             />
 
             <button
               onClick={sendMessage}
-              className="rounded-lg bg-blue-500 px-5 py-2 font-medium text-white hover:bg-blue-600"
+              disabled={!currentUser}
+              className="rounded-lg bg-blue-500 px-5 py-2 font-medium text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-400"
             >
               Send
             </button>
