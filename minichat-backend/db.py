@@ -21,15 +21,19 @@ def save_message(sender, receiver, content):
     cursor = conn.cursor()
 
     query = """
-        INSERT INTO messages (sender, receiver, content)
-        VALUES (%s, %s, %s)
+        INSERT INTO messages (sender, receiver, content, created_at)
+        VALUES (%s, %s, %s, NOW())
     """
 
     cursor.execute(query, (sender, receiver, content))
     conn.commit()
 
+    message_id = cursor.lastrowid
+
     cursor.close()
     conn.close()
+
+    return message_id
 
 
 def get_messages(user1, user2):

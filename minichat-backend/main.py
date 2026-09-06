@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -43,16 +42,25 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         while True:
             data = await websocket.receive_json()
 
-            save_message(
+            message_id = save_message(
                 data["sender"],
                 data["receiver"],
                 data["content"]
             )
 
+            message = {
+                "id": message_id,
+                "sender": data["sender"],
+                "receiver": data["receiver"],
+                "content": data["content"]
+            }
+
             if data["receiver"] in connections:
-                await connections[data["receiver"]].send_json(data)
+                await connections[data["receiver"]].send_json(message)
+
+            if data["sender"] in connections:
+                await connections[data["sender"]].send_json(message)
 
     except WebSocketDisconnect:
         if connections.get(user_id) is websocket:
             del connections[user_id]
-

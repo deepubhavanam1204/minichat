@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -10,20 +9,19 @@ type Message = {
   sender: User;
   receiver: User;
   content: string;
+  created_at?: string;
 };
 
 export default function Home() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [currentUser, setCurrentUser] =
-    useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [connectionStatus, setConnectionStatus] =
     useState("Select a user");
 
   const socketRef = useRef<WebSocket | null>(null);
-
-  const messagesEndRef =
-    useRef<HTMLDivElement | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const shouldScrollToBottom = useRef(true);
 
   useEffect(() => {
     if (!currentUser) {
@@ -34,41 +32,26 @@ export default function Home() {
 
     async function loadMessages() {
       try {
-        const receiver =
-          currentUser === "A" ? "B" : "A";
+        const receiver = currentUser === "A" ? "B" : "A";
 
         const response = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/messages/${currentUser}/${receiver}`
         );
 
-        const data: Message[] =
-          await response.json();
+        const data: Message[] = await response.json();
 
         if (!cancelled) {
-          setMessages((previousMessages) => {
-            const combined = [
-              ...data,
-              ...previousMessages
-            ];
+          setMessages(data);
 
-            const uniqueMessages =
-              combined.filter(
-                (msg, index, array) =>
-                  array.findIndex(
-                    (item) => item.id === msg.id
-                  ) === index
-              );
-
-            return uniqueMessages.sort(
-              (a, b) => a.id - b.id
-            );
-          });
+          setTimeout(() => {
+            if (messagesContainerRef.current) {
+              messagesContainerRef.current.scrollTop =
+                messagesContainerRef.current.scrollHeight;
+            }
+          }, 0);
         }
       } catch (error) {
-        console.log(
-          "Failed to load messages:",
-          error
-        );
+        console.log("Failed to load messages:", error);
       }
     }
 
@@ -91,29 +74,28 @@ export default function Home() {
     };
 
     ws.onmessage = (event) => {
-      console.log(
-        `Message received by User ${currentUser}:`,
-        event.data
-      );
-
-      const newMessage: Message =
-        JSON.parse(event.data);
+      const newMessage: Message = JSON.parse(event.data);
 
       setMessages((previousMessages) => {
-        const alreadyExists =
-          previousMessages.some(
-            (msg) => msg.id === newMessage.id
-          );
+        const alreadyExists = previousMessages.some(
+          (msg) => msg.id === newMessage.id
+        );
 
         if (alreadyExists) {
           return previousMessages;
         }
 
-        return [
-          ...previousMessages,
-          newMessage
-        ].sort((a, b) => a.id - b.id);
+        return [...previousMessages, newMessage];
       });
+
+      if (shouldScrollToBottom.current) {
+        setTimeout(() => {
+          if (messagesContainerRef.current) {
+            messagesContainerRef.current.scrollTop =
+              messagesContainerRef.current.scrollHeight;
+          }
+        }, 0);
+      }
     };
 
     ws.onerror = (error) => {
@@ -153,11 +135,20 @@ export default function Home() {
     };
   }, [currentUser]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: "smooth"
-    });
-  }, [messages]);
+  function handleScroll() {
+    const container = messagesContainerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    const distanceFromBottom =
+      container.scrollHeight -
+      container.scrollTop -
+      container.clientHeight;
+
+    shouldScrollToBottom.current = distanceFromBottom < 100;
+  }
 
   function sendMessage() {
     if (message.trim() === "") {
@@ -171,30 +162,26 @@ export default function Home() {
       socket.readyState !== WebSocket.OPEN ||
       !currentUser
     ) {
-      console.log(
-        "WebSocket is not connected"
-      );
-
+      console.log("WebSocket is not connected");
       return;
     }
 
-    const receiver =
-      currentUser === "A" ? "B" : "A";
+    const receiver = currentUser === "A" ? "B" : "A";
 
     const chatMessage = {
       sender: currentUser,
-      receiver: receiver,
-      content: message
+      receiver,
+      content: message.trim()
     };
 
-    socket.send(
-      JSON.stringify(chatMessage)
-    );
+    socket.send(JSON.stringify(chatMessage));
 
     setMessage("");
   }
 
   function switchUser(user: User) {
+    setMessages([]);
+    shouldScrollToBottom.current = true;
     setCurrentUser(user);
   }
 
@@ -233,7 +220,7 @@ export default function Home() {
           <p className="mt-2 text-sm text-gray-600">
             {currentUser
               ? `Currently chatting as User ${currentUser}`
-              : "Please select User A or User B"}
+              : "Please select a user first"}
           </p>
 
           {currentUser && (
@@ -244,12 +231,14 @@ export default function Home() {
 
         </div>
 
-        <div className="h-80 border rounded-lg p-4 mb-4 overflow-y-auto">
+        <div
+          ref={messagesContainerRef}
+          onScroll={handleScroll}
+          className="h-80 border rounded-lg p-4 mb-4 overflow-y-auto"
+        >
 
           {messages.map((msg) => {
-
-            const isMine =
-              msg.sender === currentUser;
+            const isMine = msg.sender === currentUser;
 
             return (
               <div
@@ -283,8 +272,6 @@ export default function Home() {
             );
           })}
 
-          <div ref={messagesEndRef} />
-
         </div>
 
         <div className="flex gap-2">
@@ -292,9 +279,7 @@ export default function Home() {
           <input
             type="text"
             value={message}
-            onChange={(e) =>
-              setMessage(e.target.value)
-            }
+            onChange={(e) => setMessage(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 sendMessage();
@@ -323,4 +308,3 @@ export default function Home() {
     </main>
   );
 }
-
