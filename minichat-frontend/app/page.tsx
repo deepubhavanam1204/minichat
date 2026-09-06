@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -21,7 +22,6 @@ export default function Home() {
 
   const socketRef = useRef<WebSocket | null>(null);
 
-  // Reference to the bottom of the chat
   const messagesEndRef =
     useRef<HTMLDivElement | null>(null);
 
@@ -34,11 +34,15 @@ export default function Home() {
 
     async function loadMessages() {
       try {
+        const receiver =
+          currentUser === "A" ? "B" : "A";
+
         const response = await fetch(
-         `${process.env.NEXT_PUBLIC_API_URL}/messages`
+          `${process.env.NEXT_PUBLIC_API_URL}/messages/${currentUser}/${receiver}`
         );
 
-        const data: Message[] = await response.json();
+        const data: Message[] =
+          await response.json();
 
         if (!cancelled) {
           setMessages((previousMessages) => {
@@ -149,7 +153,6 @@ export default function Home() {
     };
   }, [currentUser]);
 
-  // Automatically scroll to the latest message
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({
       behavior: "smooth"
@@ -280,7 +283,6 @@ export default function Home() {
             );
           })}
 
-          {/* Invisible element at the bottom */}
           <div ref={messagesEndRef} />
 
         </div>
@@ -321,3 +323,4 @@ export default function Home() {
     </main>
   );
 }
+
