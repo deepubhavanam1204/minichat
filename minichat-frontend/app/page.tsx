@@ -66,10 +66,6 @@ export default function Home() {
     socketRef.current = ws;
 
     ws.onopen = () => {
-      console.log(
-        `WebSocket connected as User ${currentUser}`
-      );
-
       setConnectionStatus("Connected");
     };
 
@@ -98,20 +94,11 @@ export default function Home() {
       }
     };
 
-    ws.onerror = (error) => {
-      console.log(
-        `WebSocket error for User ${currentUser}:`,
-        error
-      );
-
+    ws.onerror = () => {
       setConnectionStatus("Connection error");
     };
 
     ws.onclose = () => {
-      console.log(
-        `WebSocket disconnected for User ${currentUser}`
-      );
-
       setConnectionStatus("Disconnected");
 
       if (socketRef.current === ws) {
@@ -150,6 +137,23 @@ export default function Home() {
     shouldScrollToBottom.current = distanceFromBottom < 100;
   }
 
+  function formatTime(createdAt?: string) {
+    if (!createdAt) {
+      return "";
+    }
+
+    const date = new Date(createdAt);
+
+    if (isNaN(date.getTime())) {
+      return "";
+    }
+
+    return date.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit"
+    });
+  }
+
   function sendMessage() {
     if (message.trim() === "") {
       return;
@@ -186,16 +190,16 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-100">
+    <main className="min-h-screen flex items-center justify-center bg-gray-100 text-gray-900">
       <div className="w-full max-w-md bg-white rounded-lg shadow-md p-6">
 
-        <h1 className="text-2xl font-bold mb-4">
+        <h1 className="text-2xl font-bold mb-4 text-gray-900">
           MiniChat
         </h1>
 
         <div className="mb-4">
 
-          <p className="mb-2 font-semibold">
+          <p className="mb-2 font-semibold text-gray-900">
             You are:
           </p>
 
@@ -203,28 +207,28 @@ export default function Home() {
 
             <button
               onClick={() => switchUser("A")}
-              className="border px-4 py-2 rounded-lg"
+              className="border border-gray-300 bg-white text-gray-900 px-4 py-2 rounded-lg"
             >
               User A
             </button>
 
             <button
               onClick={() => switchUser("B")}
-              className="border px-4 py-2 rounded-lg"
+              className="border border-gray-300 bg-white text-gray-900 px-4 py-2 rounded-lg"
             >
               User B
             </button>
 
           </div>
 
-          <p className="mt-2 text-sm text-gray-600">
+          <p className="mt-2 text-sm text-gray-700">
             {currentUser
               ? `Currently chatting as User ${currentUser}`
               : "Please select a user first"}
           </p>
 
           {currentUser && (
-            <p className="text-sm mt-1">
+            <p className="text-sm mt-1 text-gray-900">
               Status: {connectionStatus}
             </p>
           )}
@@ -234,7 +238,7 @@ export default function Home() {
         <div
           ref={messagesContainerRef}
           onScroll={handleScroll}
-          className="h-80 border rounded-lg p-4 mb-4 overflow-y-auto"
+          className="h-80 border border-gray-300 rounded-lg p-4 mb-4 overflow-y-auto"
         >
 
           {messages.map((msg) => {
@@ -266,6 +270,18 @@ export default function Home() {
                     {msg.content}
                   </div>
 
+                  {msg.created_at && (
+                    <div
+                      className={`text-xs mt-1 ${
+                        isMine
+                          ? "text-blue-100"
+                          : "text-gray-500"
+                      }`}
+                    >
+                      {formatTime(msg.created_at)}
+                    </div>
+                  )}
+
                 </div>
 
               </div>
@@ -291,7 +307,7 @@ export default function Home() {
                 : "Select a user first"
             }
             disabled={!currentUser}
-            className="flex-1 border rounded-lg px-3 py-2"
+            className="flex-1 border border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 rounded-lg px-3 py-2"
           />
 
           <button

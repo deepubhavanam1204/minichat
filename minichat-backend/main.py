@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -52,7 +54,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 "id": message_id,
                 "sender": data["sender"],
                 "receiver": data["receiver"],
-                "content": data["content"]
+                "content": data["content"],
+                "created_at": datetime.now().isoformat()
             }
 
             if data["receiver"] in connections:
