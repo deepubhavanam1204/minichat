@@ -10,143 +10,118 @@ type Message = {
   sender: User;
   receiver: User;
   content: string;
-  created_at?: string;
+  created_at: string | null;
 };
 
 export default function Home() {
+  const [currentUser, setCurrentUser] = useState<User>("A");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [connectionStatus, setConnectionStatus] =
-    useState("Select a user");
+  const [connected, setConnected] = useState(false);
 
   const socketRef = useRef<WebSocket | null>(null);
-  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const shouldScrollToBottom = useRef(true);
 
+  const API_URL = process.env.NEXT_PUBLIC_API_URL;
+  const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
+
   useEffect(() => {
-    if (!currentUser) {
+    if (!API_URL || !WS_URL) {
       return;
     }
 
-    let cancelled = false;
+    const receiver = currentUser === "A" ? "B" : "A";
 
     async function loadMessages() {
       try {
-        const receiver = currentUser === "A" ? "B" : "A";
-
         const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/messages/${currentUser}/${receiver}`
+          `${API_URL}/messages/${currentUser}/${receiver}`
         );
 
-        const data: Message[] = await response.json();
+        const data = await response.json();
 
-        if (!cancelled) {
-          setMessages(data);
-        }
+        setMessages(data);
       } catch (error) {
-        console.log("Failed to load messages:", error);
+        console.error("Failed to load messages:", error);
       }
     }
 
     loadMessages();
 
-    setConnectionStatus("Connecting...");
+    const socket = new WebSocket(`${WS_URL}/ws/${currentUser}`);
 
-    const ws = new WebSocket(
-      `${process.env.NEXT_PUBLIC_WS_URL}/ws/${currentUser}`
-    );
+    socketRef.current = socket;
 
-    socketRef.current = ws;
-
-    ws.onopen = () => {
-      setConnectionStatus("Connected");
+    socket.onopen = () => {
+      setConnected(true);
+      console.log("WebSocket connected");
     };
 
-    ws.onmessage = (event) => {
-      const newMessage: Message = JSON.parse(event.data);
+    socket.onmessage = (event) => {
+      const incomingMessage: Message = JSON.parse(event.data);
 
       setMessages((previousMessages) => {
+        const temporaryMessageIndex = previousMessages.findIndex(
+          (msg) =>
+            msg.id < 0 &&
+            msg.sender === incomingMessage.sender &&
+            msg.receiver === incomingMessage.receiver &&
+            msg.content === incomingMessage.content
+        );
+
+        if (temporaryMessageIndex !== -1) {
+          const updatedMessages = [...previousMessages];
+
+          updatedMessages[temporaryMessageIndex] = incomingMessage;
+
+          return updatedMessages;
+        }
+
         const alreadyExists = previousMessages.some(
-          (msg) => msg.id === newMessage.id
+          (msg) => msg.id === incomingMessage.id
         );
 
         if (alreadyExists) {
           return previousMessages;
         }
 
-        return [...previousMessages, newMessage];
+        return [...previousMessages, incomingMessage];
       });
     };
 
-    ws.onerror = () => {
-      setConnectionStatus("Connection error");
+    socket.onclose = () => {
+      setConnected(false);
+      console.log("WebSocket disconnected");
     };
 
-    ws.onclose = () => {
-      setConnectionStatus("Disconnected");
-
-      if (socketRef.current === ws) {
-        socketRef.current = null;
-      }
+    socket.onerror = (error) => {
+      console.error("WebSocket error:", error);
     };
 
     return () => {
-      cancelled = true;
-
-      if (socketRef.current === ws) {
-        socketRef.current = null;
-      }
-
-      if (
-        ws.readyState === WebSocket.OPEN ||
-        ws.readyState === WebSocket.CONNECTING
-      ) {
-        ws.close();
-      }
+      socket.close();
+      socketRef.current = null;
     };
-  }, [currentUser]);
+  }, [currentUser, API_URL, WS_URL]);
 
   useEffect(() => {
-    if (
-      messagesContainerRef.current &&
-      shouldScrollToBottom.current
-    ) {
-      messagesContainerRef.current.scrollTop =
-        messagesContainerRef.current.scrollHeight;
+    if (shouldScrollToBottom.current) {
+      messagesEndRef.current?.scrollIntoView({
+        behavior: "smooth"
+      });
     }
   }, [messages]);
 
-  function handleScroll() {
-    const container = messagesContainerRef.current;
-
-    if (!container) {
-      return;
-    }
+  function handleScroll(event: React.UIEvent<HTMLDivElement>) {
+    const element = event.currentTarget;
 
     const distanceFromBottom =
-      container.scrollHeight -
-      container.scrollTop -
-      container.clientHeight;
+      element.scrollHeight -
+      element.scrollTop -
+      element.clientHeight;
 
     shouldScrollToBottom.current = distanceFromBottom < 100;
-  }
-
-  function formatTime(createdAt?: string) {
-    if (!createdAt) {
-      return "";
-    }
-
-    const date = new Date(createdAt);
-
-    if (isNaN(date.getTime())) {
-      return "";
-    }
-
-    return date.toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit"
-    });
   }
 
   function sendMessage() {
@@ -168,8 +143,8 @@ export default function Home() {
     const receiver = currentUser === "A" ? "B" : "A";
     const messageContent = message.trim();
 
-    const tempMessage: Message = {
-      id: Date.now(),
+    const temporaryMessage: Message = {
+      id: -Date.now(),
       sender: currentUser,
       receiver,
       content: messageContent,
@@ -178,7 +153,7 @@ export default function Home() {
 
     setMessages((previousMessages) => [
       ...previousMessages,
-      tempMessage
+      temporaryMessage
     ]);
 
     const chatMessage = {
@@ -192,96 +167,84 @@ export default function Home() {
     setMessage("");
   }
 
-  function switchUser(user: User) {
-    setMessages([]);
-    shouldScrollToBottom.current = true;
-    setCurrentUser(user);
+  function formatTime(createdAt: string | null) {
+    if (!createdAt) {
+      return "";
+    }
+
+    return new Date(createdAt).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit"
+    });
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-100 text-gray-900">
-      <div className="w-full max-w-md bg-white rounded-lg shadow-md p-6">
+    <main className="min-h-screen bg-gray-100 p-4 text-gray-900">
+      <div className="mx-auto flex h-[90vh] max-w-2xl flex-col rounded-xl bg-white shadow-lg">
+        <div className="border-b p-4">
+          <h1 className="text-2xl font-bold text-gray-900">
+            MiniChat
+          </h1>
 
-        <h1 className="text-2xl font-bold mb-4 text-gray-900">
-          MiniChat
-        </h1>
-
-        <div className="mb-4">
-
-          <p className="mb-2 font-semibold text-gray-900">
-            You are:
-          </p>
-
-          <div className="flex gap-2">
-
+          <div className="mt-3 flex items-center gap-3">
             <button
-              onClick={() => switchUser("A")}
-              className="border border-gray-300 bg-white text-gray-900 px-4 py-2 rounded-lg"
+              onClick={() => setCurrentUser("A")}
+              className={`rounded-lg border px-4 py-2 ${
+                currentUser === "A"
+                  ? "bg-blue-500 text-white"
+                  : "bg-white text-gray-900"
+              }`}
             >
               User A
             </button>
 
             <button
-              onClick={() => switchUser("B")}
-              className="border border-gray-300 bg-white text-gray-900 px-4 py-2 rounded-lg"
+              onClick={() => setCurrentUser("B")}
+              className={`rounded-lg border px-4 py-2 ${
+                currentUser === "B"
+                  ? "bg-blue-500 text-white"
+                  : "bg-white text-gray-900"
+              }`}
             >
               User B
             </button>
 
+            <span
+              className={`text-sm font-medium ${
+                connected ? "text-green-600" : "text-red-600"
+              }`}
+            >
+              {connected ? "Connected" : "Disconnected"}
+            </span>
           </div>
-
-          <p className="mt-2 text-sm text-gray-700">
-            {currentUser
-              ? `Currently chatting as User ${currentUser}`
-              : "Please select a user first"}
-          </p>
-
-          {currentUser && (
-            <p className="text-sm mt-1 text-gray-900">
-              Status: {connectionStatus}
-            </p>
-          )}
-
         </div>
 
         <div
-          ref={messagesContainerRef}
+          className="flex-1 overflow-y-auto p-4"
           onScroll={handleScroll}
-          className="h-80 border border-gray-300 rounded-lg p-4 mb-4 overflow-y-auto"
         >
+          <div className="flex flex-col gap-3">
+            {messages.map((msg) => {
+              const isMine = msg.sender === currentUser;
 
-          {messages.map((msg) => {
-            const isMine = msg.sender === currentUser;
-
-            return (
-              <div
-                key={msg.id}
-                className={`flex mb-2 ${
-                  isMine
-                    ? "justify-end"
-                    : "justify-start"
-                }`}
-              >
-
+              return (
                 <div
-                  className={`max-w-[75%] px-3 py-2 rounded-lg ${
-                    isMine
-                      ? "bg-blue-500 text-white rounded-br-none"
-                      : "bg-gray-200 text-gray-900 rounded-bl-none"
+                  key={msg.id}
+                  className={`flex ${
+                    isMine ? "justify-end" : "justify-start"
                   }`}
                 >
+                  <div
+                    className={`max-w-[75%] rounded-xl px-4 py-2 ${
+                      isMine
+                        ? "bg-blue-500 text-white"
+                        : "bg-gray-200 text-gray-900"
+                    }`}
+                  >
+                    <div>{msg.content}</div>
 
-                  <div className="text-sm font-semibold mb-1">
-                    User {msg.sender}
-                  </div>
-
-                  <div>
-                    {msg.content}
-                  </div>
-
-                  {msg.created_at && (
                     <div
-                      className={`text-xs mt-1 ${
+                      className={`mt-1 text-xs ${
                         isMine
                           ? "text-blue-100"
                           : "text-gray-500"
@@ -289,46 +252,37 @@ export default function Home() {
                     >
                       {formatTime(msg.created_at)}
                     </div>
-                  )}
-
+                  </div>
                 </div>
+              );
+            })}
 
-              </div>
-            );
-          })}
-
+            <div ref={messagesEndRef} />
+          </div>
         </div>
 
-        <div className="flex gap-2">
+        <div className="border-t p-4">
+          <div className="flex gap-2">
+            <input
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  sendMessage();
+                }
+              }}
+              placeholder="Type a message..."
+              className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-500"
+            />
 
-          <input
-            type="text"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                sendMessage();
-              }
-            }}
-            placeholder={
-              currentUser
-                ? "Type a message..."
-                : "Select a user first"
-            }
-            disabled={!currentUser}
-            className="flex-1 border border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 rounded-lg px-3 py-2"
-          />
-
-          <button
-            onClick={sendMessage}
-            disabled={!currentUser}
-            className="bg-blue-500 text-white px-4 py-2 rounded-lg disabled:bg-gray-400"
-          >
-            Send
-          </button>
-
+            <button
+              onClick={sendMessage}
+              className="rounded-lg bg-blue-500 px-5 py-2 font-medium text-white hover:bg-blue-600"
+            >
+              Send
+            </button>
+          </div>
         </div>
-
       </div>
     </main>
   );
