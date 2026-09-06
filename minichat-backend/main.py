@@ -2,7 +2,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from db import get_connection
+from db import get_connection, get_messages
 
 app = FastAPI()
 
@@ -28,6 +28,9 @@ def db_test():
     conn.close()
     return {"database": "connected"}
 
+@app.get("/messages/{user1}/{user2}")
+def messages(user1: str, user2: str):
+    return get_messages(user1, user2)
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
