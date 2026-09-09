@@ -55,3 +55,22 @@ def get_messages(user1, user2):
     conn.close()
 
     return messages
+
+def create_user(username, email, password_hash):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        INSERT INTO users (username, email, password_hash)
+        VALUES (%s, %s, %s)
+    """
+
+    cursor.execute(query, (username, email, password_hash))
+    conn.commit()
+
+    user_id = cursor.lastrowid
+
+    cursor.close()
+    conn.close()
+
+    return user_id

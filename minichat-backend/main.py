@@ -2,10 +2,17 @@ from datetime import datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import bcrypt
 
-from db import get_connection, get_messages, save_message
+from db import get_connection, get_messages, save_message, create_user
 
 app = FastAPI()
+
+class SignupRequest(BaseModel):
+    username: str
+    email: str
+    password: str
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,6 +36,24 @@ def db_test():
     conn.close()
     return {"database": "connected"}
 
+@app.post("/signup")
+def signup(request: SignupRequest):
+    password_hash = bcrypt.hashpw(
+        request.password.encode("utf-8"),
+        bcrypt.gensalt()
+    ).decode("utf-8")
+
+    user_id = create_user(
+        request.username,
+        request.email,
+        password_hash
+    )
+
+    return {
+        "id": user_id,
+        "username": request.username,
+        "email": request.email
+    }
 
 @app.get("/messages/{user1}/{user2}")
 def messages(user1: str, user2: str):
