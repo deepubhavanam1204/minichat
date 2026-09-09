@@ -1,19 +1,26 @@
-
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
-type User = "A" | "B";
+type User = {
+  id: number;
+  username: string;
+  email: string;
+  token: string;
+};
 
 type Message = {
   id: number;
-  sender: User;
-  receiver: User;
+  sender: string;
+  receiver: string;
   content: string;
   created_at: string | null;
 };
 
 export default function Home() {
+  const router = useRouter();
+
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -27,17 +34,44 @@ export default function Home() {
   const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
 
   useEffect(() => {
-    if (!currentUser || !API_URL || !WS_URL) {
+    const storedUser = localStorage.getItem("user");
+
+    if (!storedUser) {
+      router.push("/login");
       return;
     }
 
-    const receiver = currentUser === "A" ? "B" : "A";
+    const user: User = JSON.parse(storedUser);
+    setCurrentUser(user);
+
+    if (!API_URL || !WS_URL) {
+      return;
+    }
+
+    const receiver =
+      user.username === "alice" ? "bob" : "alice";
 
     async function loadMessages() {
       try {
         const response = await fetch(
-          `${API_URL}/messages/${currentUser}/${receiver}`
+          `${API_URL}/messages/${user.username}/${receiver}`,
+          {
+            headers: {
+              Authorization: `Bearer ${user.token}`,
+            },
+          }
         );
+
+        if (response.status === 401) {
+          localStorage.removeItem("user");
+          router.push("/login");
+          return;
+        }
+
+        if (response.status === 403) {
+          console.error("You are not allowed to access these messages");
+          return;
+        }
 
         const data = await response.json();
 
@@ -49,7 +83,9 @@ export default function Home() {
 
     loadMessages();
 
-    const socket = new WebSocket(`${WS_URL}/ws/${currentUser}`);
+  const socket = new WebSocket(
+  `${WS_URL}/ws/${user.username}?token=${encodeURIComponent(user.token)}`
+);
 
     socketRef.current = socket;
 
@@ -104,12 +140,12 @@ export default function Home() {
       socketRef.current = null;
       setConnected(false);
     };
-  }, [currentUser, API_URL, WS_URL]);
+  }, [API_URL, WS_URL, router]);
 
   useEffect(() => {
     if (shouldScrollToBottom.current) {
       messagesEndRef.current?.scrollIntoView({
-        behavior: "smooth"
+        behavior: "smooth",
       });
     }
   }, [messages]);
@@ -123,11 +159,6 @@ export default function Home() {
       element.clientHeight;
 
     shouldScrollToBottom.current = distanceFromBottom < 100;
-  }
-
-  function selectUser(user: User) {
-    setMessages([]);
-    setCurrentUser(user);
   }
 
   function sendMessage() {
@@ -146,31 +177,45 @@ export default function Home() {
       return;
     }
 
-    const receiver = currentUser === "A" ? "B" : "A";
+    const receiver =
+      currentUser.username === "alice" ? "bob" : "alice";
+
     const messageContent = message.trim();
 
     const temporaryMessage: Message = {
       id: -Date.now(),
-      sender: currentUser,
+      sender: currentUser.username,
       receiver,
       content: messageContent,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
     };
 
     setMessages((previousMessages) => [
       ...previousMessages,
-      temporaryMessage
+      temporaryMessage,
     ]);
 
     const chatMessage = {
-      sender: currentUser,
+      sender: currentUser.username,
       receiver,
-      content: messageContent
+      content: messageContent,
     };
 
     socket.send(JSON.stringify(chatMessage));
 
     setMessage("");
+  }
+
+  function logout() {
+    socketRef.current?.close();
+
+    localStorage.removeItem("user");
+
+    setCurrentUser(null);
+    setMessages([]);
+    setConnected(false);
+
+    router.push("/login");
   }
 
   function formatTime(createdAt: string | null) {
@@ -180,7 +225,7 @@ export default function Home() {
 
     return new Date(createdAt).toLocaleTimeString([], {
       hour: "2-digit",
-      minute: "2-digit"
+      minute: "2-digit",
     });
   }
 
@@ -188,43 +233,36 @@ export default function Home() {
     <main className="min-h-screen bg-gray-100 p-4 text-gray-900">
       <div className="mx-auto flex h-[90vh] max-w-2xl flex-col rounded-xl border-2 border-black bg-white shadow-lg">
         <div className="border-b p-4">
-          <h1 className="text-2xl font-bold text-gray-900">
-            MiniChat
-          </h1>
-
-          <div className="mt-3 flex items-center gap-3">
-            <button
-              onClick={() => selectUser("A")}
-              className={`rounded-lg border px-4 py-2 ${
-                currentUser === "A"
-                  ? "bg-blue-500 text-white"
-                  : "bg-white text-gray-900"
-              }`}
-            >
-              User A
-            </button>
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold text-gray-900">
+              MiniChat
+            </h1>
 
             <button
-              onClick={() => selectUser("B")}
-              className={`rounded-lg border px-4 py-2 ${
-                currentUser === "B"
-                  ? "bg-blue-500 text-white"
-                  : "bg-white text-gray-900"
-              }`}
+              onClick={logout}
+              className="rounded-lg bg-red-500 px-4 py-2 font-medium text-white hover:bg-red-600"
             >
-              User B
+              Logout
             </button>
+          </div>
 
-            {currentUser && (
+          {currentUser && (
+            <div className="mt-3 flex items-center gap-3">
+              <span className="font-medium">
+                Logged in as: {currentUser.username}
+              </span>
+
               <span
                 className={`text-sm font-medium ${
-                  connected ? "text-green-600" : "text-red-600"
+                  connected
+                    ? "text-green-600"
+                    : "text-red-600"
                 }`}
               >
                 {connected ? "Connected" : "Disconnected"}
               </span>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         <div
@@ -233,18 +271,21 @@ export default function Home() {
         >
           {!currentUser ? (
             <div className="flex h-full items-center justify-center text-gray-500">
-              Choose User A or User B to start chatting
+              Please login first
             </div>
           ) : (
             <div className="flex flex-col gap-3">
               {messages.map((msg) => {
-                const isMine = msg.sender === currentUser;
+                const isMine =
+                  msg.sender === currentUser.username;
 
                 return (
                   <div
                     key={msg.id}
                     className={`flex ${
-                      isMine ? "justify-end" : "justify-start"
+                      isMine
+                        ? "justify-end"
+                        : "justify-start"
                     }`}
                   >
                     <div
@@ -279,7 +320,9 @@ export default function Home() {
           <div className="flex gap-2">
             <input
               value={message}
-              onChange={(event) => setMessage(event.target.value)}
+              onChange={(event) =>
+                setMessage(event.target.value)
+              }
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   sendMessage();
@@ -289,7 +332,7 @@ export default function Home() {
               placeholder={
                 currentUser
                   ? "Type a message..."
-                  : "Choose a user first..."
+                  : "Please login first..."
               }
               className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-500 disabled:bg-gray-100"
             />
@@ -307,4 +350,3 @@ export default function Home() {
     </main>
   );
 }
-

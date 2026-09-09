@@ -1,22 +1,39 @@
-from datetime import datetime
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from datetime import datetime, timedelta
+
 import bcrypt
+import jwt
 
-from db import get_connection, get_messages, save_message, create_user, find_user_by_email
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    status,
+    WebSocket,
+    WebSocketDisconnect
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
+
+from db import (
+    create_user,
+    find_user_by_email,
+    find_user_by_username,
+    get_messages,
+    save_message
+)
+
 
 app = FastAPI()
 
-class SignupRequest(BaseModel):
-    username: str
-    email: str
-    password: str
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
+SECRET_KEY = "minichat-secret-key"
+ALGORITHM = "HS256"
+
+
+security = HTTPBearer()
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,95 +43,239 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-connections = {}
+
+class SignupRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ConnectionManager:
+
+    def __init__(self):
+        self.active_connections = {}
+
+    async def connect(self, username, websocket):
+        await websocket.accept()
+        self.active_connections[username] = websocket
+
+    def disconnect(self, username):
+        if username in self.active_connections:
+            del self.active_connections[username]
+
+    async def send_to_user(self, username, message):
+        websocket = self.active_connections.get(username)
+
+        if websocket:
+            await websocket.send_json(message)
+
+
+manager = ConnectionManager()
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    token = credentials.credentials
+
+    try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+        return payload
+
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired"
+        )
+
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok"
+    }
 
-
-@app.get("/db-test")
-def db_test():
-    conn = get_connection()
-    conn.close()
-    return {"database": "connected"}
 
 @app.post("/signup")
-def signup(request: SignupRequest):
+def signup(data: SignupRequest):
+
+    existing_email = find_user_by_email(data.email)
+
+    if existing_email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+
+    existing_username = find_user_by_username(data.username)
+
+    if existing_username:
+        raise HTTPException(
+            status_code=400,
+            detail="Username already taken"
+        )
+
     password_hash = bcrypt.hashpw(
-        request.password.encode("utf-8"),
+        data.password.encode("utf-8"),
         bcrypt.gensalt()
     ).decode("utf-8")
 
     user_id = create_user(
-        request.username,
-        request.email,
+        data.username,
+        data.email,
         password_hash
     )
 
     return {
         "id": user_id,
-        "username": request.username,
-        "email": request.email
+        "username": data.username,
+        "email": data.email
     }
 
+
 @app.post("/login")
-def login(request: LoginRequest):
-    user = find_user_by_email(request.email)
+def login(data: LoginRequest):
+
+    user = find_user_by_email(data.email)
 
     if not user:
-        return {"error": "Invalid email or password"}
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
 
-    password_valid = bcrypt.checkpw(
-        request.password.encode("utf-8"),
+    password_correct = bcrypt.checkpw(
+        data.password.encode("utf-8"),
         user["password_hash"].encode("utf-8")
     )
 
-    if not password_valid:
-        return {"error": "Invalid email or password"}
+    if not password_correct:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    payload = {
+        "id": user["id"],
+        "username": user["username"],
+        "exp": datetime.utcnow() + timedelta(hours=24)
+    }
+
+    token = jwt.encode(
+        payload,
+        SECRET_KEY,
+        algorithm=ALGORITHM
+    )
 
     return {
         "message": "Login successful",
         "id": user["id"],
         "username": user["username"],
-        "email": user["email"]
+        "email": user["email"],
+        "token": token
     }
 
+
 @app.get("/messages/{user1}/{user2}")
-def messages(user1: str, user2: str):
+def messages(
+    user1: str,
+    user2: str,
+    current_user: dict = Depends(get_current_user)
+):
+
+    if current_user["username"] != user1:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only access your own messages"
+        )
+
     return get_messages(user1, user2)
 
 
-@app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    await websocket.accept()
-    connections[user_id] = websocket
+@app.websocket("/ws/{username}")
+async def websocket_endpoint(
+    websocket: WebSocket,
+    username: str
+):
+
+    token = websocket.query_params.get("token")
+
+    if not token:
+        await websocket.close(code=1008)
+        return
 
     try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+        if payload["username"] != username:
+            await websocket.close(code=1008)
+            return
+
+    except jwt.ExpiredSignatureError:
+        await websocket.close(code=1008)
+        return
+
+    except jwt.InvalidTokenError:
+        await websocket.close(code=1008)
+        return
+
+    await manager.connect(username, websocket)
+
+    print(f"{username} connected")
+
+    try:
+
         while True:
+
             data = await websocket.receive_json()
 
             message_id = save_message(
-                data["sender"],
+                username,
                 data["receiver"],
                 data["content"]
             )
 
             message = {
                 "id": message_id,
-                "sender": data["sender"],
+                "sender": username,
                 "receiver": data["receiver"],
                 "content": data["content"],
-                "created_at": datetime.now().isoformat()
+                "created_at": datetime.utcnow().isoformat()
             }
 
-            if data["receiver"] in connections:
-                await connections[data["receiver"]].send_json(message)
+            await manager.send_to_user(
+                username,
+                message
+            )
 
-            if data["sender"] in connections:
-                await connections[data["sender"]].send_json(message)
+            await manager.send_to_user(
+                data["receiver"],
+                message
+            )
 
     except WebSocketDisconnect:
-        if connections.get(user_id) is websocket:
-            del connections[user_id]
+
+        manager.disconnect(username)
+
+        print(f"{username} disconnected")
+

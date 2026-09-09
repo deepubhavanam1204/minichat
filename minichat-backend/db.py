@@ -1,19 +1,27 @@
+
 import os
 
 import mysql.connector
+from mysql.connector import pooling
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
+connection_pool = pooling.MySQLConnectionPool(
+    pool_name="minichat_pool",
+    pool_size=5,
+    pool_reset_session=True,
+    host=os.getenv("MYSQLHOST"),
+    port=int(os.getenv("MYSQLPORT", "3306")),
+    user=os.getenv("MYSQLUSER"),
+    password=os.getenv("MYSQLPASSWORD"),
+    database=os.getenv("MYSQLDATABASE")
+)
+
+
 def get_connection():
-    return mysql.connector.connect(
-        host=os.getenv("MYSQLHOST"),
-        port=int(os.getenv("MYSQLPORT", "3306")),
-        user=os.getenv("MYSQLUSER"),
-        password=os.getenv("MYSQLPASSWORD"),
-        database=os.getenv("MYSQLDATABASE")
-    )
+    return connection_pool.get_connection()
 
 
 def save_message(sender, receiver, content):
@@ -56,6 +64,7 @@ def get_messages(user1, user2):
 
     return messages
 
+
 def create_user(username, email, password_hash):
     conn = get_connection()
     cursor = conn.cursor()
@@ -75,6 +84,7 @@ def create_user(username, email, password_hash):
 
     return user_id
 
+
 def find_user_by_email(email):
     conn = get_connection()
     cursor = conn.cursor(dictionary=True)
@@ -92,3 +102,23 @@ def find_user_by_email(email):
     conn.close()
 
     return user
+
+
+def find_user_by_username(username):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    query = """
+        SELECT id, username, email
+        FROM users
+        WHERE username = %s
+    """
+
+    cursor.execute(query, (username,))
+    user = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    return user
+
