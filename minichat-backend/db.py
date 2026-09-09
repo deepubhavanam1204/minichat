@@ -74,3 +74,21 @@ def create_user(username, email, password_hash):
     conn.close()
 
     return user_id
+
+def find_user_by_email(email):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    query = """
+        SELECT id, username, email, password_hash
+        FROM users
+        WHERE email = %s
+    """
+
+    cursor.execute(query, (email,))
+    user = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    return user

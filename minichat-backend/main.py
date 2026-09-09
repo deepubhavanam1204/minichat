@@ -5,12 +5,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import bcrypt
 
-from db import get_connection, get_messages, save_message, create_user
+from db import get_connection, get_messages, save_message, create_user, find_user_by_email
 
 app = FastAPI()
 
 class SignupRequest(BaseModel):
     username: str
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
     email: str
     password: str
 
@@ -53,6 +57,28 @@ def signup(request: SignupRequest):
         "id": user_id,
         "username": request.username,
         "email": request.email
+    }
+
+@app.post("/login")
+def login(request: LoginRequest):
+    user = find_user_by_email(request.email)
+
+    if not user:
+        return {"error": "Invalid email or password"}
+
+    password_valid = bcrypt.checkpw(
+        request.password.encode("utf-8"),
+        user["password_hash"].encode("utf-8")
+    )
+
+    if not password_valid:
+        return {"error": "Invalid email or password"}
+
+    return {
+        "message": "Login successful",
+        "id": user["id"],
+        "username": user["username"],
+        "email": user["email"]
     }
 
 @app.get("/messages/{user1}/{user2}")
