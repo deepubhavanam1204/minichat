@@ -122,3 +122,20 @@ def find_user_by_username(username):
 
     return user
 
+def get_all_users():
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    query = """
+        SELECT id, username, email
+        FROM users
+        ORDER BY username ASC
+    """
+
+    cursor.execute(query)
+    users = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return users

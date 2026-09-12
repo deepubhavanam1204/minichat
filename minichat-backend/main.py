@@ -1,4 +1,3 @@
-
 from datetime import datetime, timedelta
 
 import bcrypt
@@ -20,20 +19,17 @@ from db import (
     create_user,
     find_user_by_email,
     find_user_by_username,
+    get_all_users,
     get_messages,
     save_message
 )
 
-
 app = FastAPI()
-
 
 SECRET_KEY = "minichat-secret-key"
 ALGORITHM = "HS256"
 
-
 security = HTTPBearer()
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -107,9 +103,19 @@ def get_current_user(
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok"
-    }
+    return {"status": "ok"}
+
+
+@app.get("/users")
+def users(current_user: dict = Depends(get_current_user)):
+
+    all_users = get_all_users()
+
+    return [
+        user
+        for user in all_users
+        if user["username"] != current_user["username"]
+    ]
 
 
 @app.post("/signup")
@@ -278,4 +284,3 @@ async def websocket_endpoint(
         manager.disconnect(username)
 
         print(f"{username} disconnected")
-
