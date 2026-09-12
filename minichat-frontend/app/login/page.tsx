@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState } from "react";
@@ -15,24 +14,33 @@ export default function LoginPage() {
 
     const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
-    const response = await fetch(`${API_URL}/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        email,
-        password,
-      }),
-    });
+    if (!API_URL) {
+      console.error("NEXT_PUBLIC_API_URL is not defined");
+      return;
+    }
 
-    const data = await response.json();
+    try {
+      const response = await fetch(`${API_URL}/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      });
 
-    console.log(data);
+      const data = await response.json();
 
-    if (data.message === "Login successful") {
-      localStorage.setItem("user", JSON.stringify(data));
-      router.push("/");
+      console.log(data);
+
+      if (data.message === "Login successful") {
+        localStorage.setItem("user", JSON.stringify(data));
+        router.push("/");
+      }
+    } catch (error) {
+      console.error("Login failed:", error);
     }
   }
 
@@ -72,14 +80,14 @@ export default function LoginPage() {
             Login
           </button>
         </form>
+
         <button
-  onClick={() => router.push("/signup")}
-  className="mt-4 w-full text-sm text-blue-500 hover:underline"
->
-  Don't have an account? Sign up
-</button>
+          onClick={() => router.push("/signup")}
+          className="mt-4 w-full text-sm text-blue-500 hover:underline"
+        >
+          Don't have an account? Sign up
+        </button>
       </div>
     </main>
   );
 }
-
