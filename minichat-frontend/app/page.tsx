@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -174,15 +175,18 @@ export default function Home() {
       return;
     }
 
+    const loggedInUser = currentUser;
+    const chatUser = selectedUser;
+
     async function loadMessages() {
       try {
         setMessages([]);
 
         const response = await fetch(
-          `${API_URL}/messages/${currentUser.username}/${selectedUser.username}`,
+          `${API_URL}/messages/${loggedInUser.username}/${chatUser.username}`,
           {
             headers: {
-              Authorization: `Bearer ${currentUser.token}`,
+              Authorization: `Bearer ${loggedInUser.token}`,
             },
           }
         );
@@ -309,7 +313,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-gray-100 p-4 text-gray-900">
       <div className="mx-auto flex h-[90vh] max-w-5xl overflow-hidden rounded-xl border-2 border-black bg-white shadow-lg">
-        
+
         <div className="flex w-64 flex-col border-r">
           <div className="border-b p-4">
             <h1 className="text-2xl font-bold text-gray-900">
@@ -488,3 +492,4 @@ export default function Home() {
     </main>
   );
 }
+
