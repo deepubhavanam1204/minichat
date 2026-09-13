@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -15,6 +14,7 @@ type ChatUser = {
   id: number;
   username: string;
   email: string;
+  online: boolean;
 };
 
 type Message = {
@@ -23,6 +23,12 @@ type Message = {
   receiver: string;
   content: string;
   created_at: string | null;
+};
+
+type PresenceMessage = {
+  type: "presence";
+  username: string;
+  online: boolean;
 };
 
 export default function Home() {
@@ -107,7 +113,40 @@ export default function Home() {
     };
 
     socket.onmessage = (event) => {
-      const incomingMessage: Message = JSON.parse(event.data);
+      const incomingData = JSON.parse(event.data);
+
+      if (incomingData.type === "presence") {
+        const presenceMessage: PresenceMessage = incomingData;
+
+        setUsers((previousUsers) =>
+          previousUsers.map((existingUser) =>
+            existingUser.username === presenceMessage.username
+              ? {
+                  ...existingUser,
+                  online: presenceMessage.online,
+                }
+              : existingUser
+          )
+        );
+
+        setSelectedUser((previousSelectedUser) => {
+          if (
+            previousSelectedUser &&
+            previousSelectedUser.username === presenceMessage.username
+          ) {
+            return {
+              ...previousSelectedUser,
+              online: presenceMessage.online,
+            };
+          }
+
+          return previousSelectedUser;
+        });
+
+        return;
+      }
+
+      const incomingMessage: Message = incomingData;
 
       const selected = selectedUserRef.current;
 
@@ -347,8 +386,9 @@ export default function Home() {
                       : "bg-white"
                   }`}
                 >
-                  <div className="font-medium">
-                    {user.username}
+                  <div className="flex items-center gap-2 font-medium">
+                    <span>{user.online ? "🟢" : "⚪"}</span>
+                    <span>{user.username}</span>
                   </div>
 
                   <div className="text-xs text-gray-500">
@@ -492,4 +532,3 @@ export default function Home() {
     </main>
   );
 }
-

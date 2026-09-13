@@ -60,9 +60,12 @@ class ConnectionManager:
         await websocket.accept()
         self.active_connections[username] = websocket
 
-    def disconnect(self, username):
-        if username in self.active_connections:
-            del self.active_connections[username]
+    def disconnect(self, username, websocket):
+     if self.active_connections.get(username) is websocket:
+        del self.active_connections[username]
+        return True
+
+     return False
 
     async def send_to_user(self, username, message):
         websocket = self.active_connections.get(username)
@@ -70,8 +73,17 @@ class ConnectionManager:
         if websocket:
             await websocket.send_json(message)
 
+    async def broadcast_presence(self, username, online):
+        for websocket in self.active_connections.values():
+            await websocket.send_json({
+                "type": "presence",
+                "username": username,
+                "online": online
+            })
+
 
 manager = ConnectionManager()
+online_users = set()
 
 
 def get_current_user(
@@ -112,7 +124,10 @@ def users(current_user: dict = Depends(get_current_user)):
     all_users = get_all_users()
 
     return [
-        user
+        {
+            **user,
+            "online": user["username"] in online_users
+        }
         for user in all_users
         if user["username"] != current_user["username"]
     ]
@@ -247,6 +262,10 @@ async def websocket_endpoint(
 
     await manager.connect(username, websocket)
 
+    online_users.add(username)
+
+    await manager.broadcast_presence(username, True)
+
     print(f"{username} connected")
 
     try:
@@ -281,6 +300,14 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
 
-        manager.disconnect(username)
+        was_current_connection = manager.disconnect(
+    username,
+    websocket
+)
 
-        print(f"{username} disconnected")
+    if was_current_connection:
+     online_users.discard(username)
+
+     await manager.broadcast_presence(username, False)
+
+    print(f"{username} disconnected")
