@@ -1,3 +1,4 @@
+
 from datetime import datetime, timedelta
 
 import bcrypt
@@ -58,28 +59,47 @@ class ConnectionManager:
 
     async def connect(self, username, websocket):
         await websocket.accept()
-        self.active_connections[username] = websocket
+
+        if username not in self.active_connections:
+            self.active_connections[username] = set()
+
+        was_offline = len(self.active_connections[username]) == 0
+
+        self.active_connections[username].add(websocket)
+
+        return was_offline
 
     def disconnect(self, username, websocket):
-     if self.active_connections.get(username) is websocket:
-        del self.active_connections[username]
-        return True
+        if username not in self.active_connections:
+            return False
 
-     return False
+        connections = self.active_connections[username]
+
+        if websocket not in connections:
+            return False
+
+        connections.remove(websocket)
+
+        if len(connections) == 0:
+            del self.active_connections[username]
+            return True
+
+        return False
 
     async def send_to_user(self, username, message):
-        websocket = self.active_connections.get(username)
+        connections = self.active_connections.get(username, set())
 
-        if websocket:
+        for websocket in connections:
             await websocket.send_json(message)
 
     async def broadcast_presence(self, username, online):
-        for websocket in self.active_connections.values():
-            await websocket.send_json({
-                "type": "presence",
-                "username": username,
-                "online": online
-            })
+        for connections in self.active_connections.values():
+            for websocket in connections:
+                await websocket.send_json({
+                    "type": "presence",
+                    "username": username,
+                    "online": online
+                })
 
 
 manager = ConnectionManager()
@@ -260,11 +280,18 @@ async def websocket_endpoint(
         await websocket.close(code=1008)
         return
 
-    await manager.connect(username, websocket)
+    was_offline = await manager.connect(
+        username,
+        websocket
+    )
 
-    online_users.add(username)
+    if was_offline:
+        online_users.add(username)
 
-    await manager.broadcast_presence(username, True)
+        await manager.broadcast_presence(
+            username,
+            True
+        )
 
     print(f"{username} connected")
 
@@ -300,14 +327,19 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
 
-        was_current_connection = manager.disconnect(
-    username,
-    websocket
-)
+        was_last_connection = manager.disconnect(
+            username,
+            websocket
+        )
 
-    if was_current_connection:
-     online_users.discard(username)
+        if was_last_connection:
 
-     await manager.broadcast_presence(username, False)
+            online_users.discard(username)
 
-    print(f"{username} disconnected")
+            await manager.broadcast_presence(
+                username,
+                False
+            )
+
+        print(f"{username} disconnected")
+
