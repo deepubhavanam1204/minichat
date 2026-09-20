@@ -21,9 +21,13 @@ from db import (
     find_user_by_email,
     find_user_by_username,
     get_all_users,
+    get_message_sender,
     get_messages,
-    save_message
+    mark_message_as_read,
+    save_message,
+    update_message_status
 )
+
 
 app = FastAPI()
 
@@ -31,6 +35,7 @@ SECRET_KEY = "minichat-secret-key"
 ALGORITHM = "HS256"
 
 security = HTTPBearer()
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,7 +58,6 @@ class LoginRequest(BaseModel):
 
 
 class ConnectionManager:
-
     def __init__(self):
         self.active_connections = {}
 
@@ -89,20 +93,41 @@ class ConnectionManager:
     async def send_to_user(self, username, message):
         connections = self.active_connections.get(username, set())
 
+        disconnected = set()
+
         for websocket in connections:
-            await websocket.send_json(message)
+            try:
+                await websocket.send_json(message)
+            except Exception:
+                disconnected.add(websocket)
+
+        for websocket in disconnected:
+            connections.discard(websocket)
+
+        if len(connections) == 0 and username in self.active_connections:
+            del self.active_connections[username]
 
     async def broadcast_presence(self, username, online):
+        disconnected = []
+
         for connections in self.active_connections.values():
             for websocket in connections:
-                await websocket.send_json({
-                    "type": "presence",
-                    "username": username,
-                    "online": online
-                })
+                try:
+                    await websocket.send_json({
+                        "type": "presence",
+                        "username": username,
+                        "online": online
+                    })
+                except Exception:
+                    disconnected.append(websocket)
+
+        for websocket in disconnected:
+            for connections in self.active_connections.values():
+                connections.discard(websocket)
 
 
 manager = ConnectionManager()
+
 online_users = set()
 
 
@@ -140,7 +165,6 @@ def health():
 
 @app.get("/users")
 def users(current_user: dict = Depends(get_current_user)):
-
     all_users = get_all_users()
 
     return [
@@ -155,7 +179,6 @@ def users(current_user: dict = Depends(get_current_user)):
 
 @app.post("/signup")
 def signup(data: SignupRequest):
-
     existing_email = find_user_by_email(data.email)
 
     if existing_email:
@@ -192,7 +215,6 @@ def signup(data: SignupRequest):
 
 @app.post("/login")
 def login(data: LoginRequest):
-
     user = find_user_by_email(data.email)
 
     if not user:
@@ -239,7 +261,6 @@ def messages(
     user2: str,
     current_user: dict = Depends(get_current_user)
 ):
-
     if current_user["username"] != user1:
         raise HTTPException(
             status_code=403,
@@ -254,7 +275,6 @@ async def websocket_endpoint(
     websocket: WebSocket,
     username: str
 ):
-
     token = websocket.query_params.get("token")
 
     if not token:
@@ -293,16 +313,11 @@ async def websocket_endpoint(
             True
         )
 
-    print(f"{username} connected")
-
     try:
-
         while True:
-
             data = await websocket.receive_json()
 
             if data.get("type") == "typing":
-
                 await manager.send_to_user(
                     data["receiver"],
                     {
@@ -314,6 +329,69 @@ async def websocket_endpoint(
 
                 continue
 
+            if data.get("type") == "delivered":
+                message_id = data.get("message_id")
+
+                if not message_id:
+                    continue
+
+                sender = get_message_sender(
+                    message_id,
+                    username
+                )
+
+                if not sender:
+                    continue
+
+                updated = update_message_status(
+                    message_id,
+                    "DELIVERED",
+                    username
+                )
+
+                if updated:
+                    await manager.send_to_user(
+                        sender,
+                        {
+                            "type": "message_status",
+                            "message_id": message_id,
+                            "status": "DELIVERED"
+                        }
+                    )
+
+                continue
+
+            if data.get("type") == "read":
+                message_id = data.get("message_id")
+
+                if not message_id:
+                    continue
+
+                sender = get_message_sender(
+                    message_id,
+                    username
+                )
+
+                if not sender:
+                    continue
+
+                updated = mark_message_as_read(
+                    message_id,
+                    username
+                )
+
+                if updated:
+                    await manager.send_to_user(
+                        sender,
+                        {
+                            "type": "message_status",
+                            "message_id": message_id,
+                            "status": "READ"
+                        }
+                    )
+
+                continue
+
             message_id = save_message(
                 username,
                 data["receiver"],
@@ -321,10 +399,12 @@ async def websocket_endpoint(
             )
 
             message = {
+                "type": "new_message",
                 "id": message_id,
                 "sender": username,
                 "receiver": data["receiver"],
                 "content": data["content"],
+                "status": "SENT",
                 "created_at": datetime.utcnow().isoformat()
             }
 
@@ -339,14 +419,12 @@ async def websocket_endpoint(
             )
 
     except WebSocketDisconnect:
-
         was_last_connection = manager.disconnect(
             username,
             websocket
         )
 
         if was_last_connection:
-
             online_users.discard(username)
 
             await manager.broadcast_presence(
@@ -354,4 +432,9 @@ async def websocket_endpoint(
                 False
             )
 
-        print(f"{username} disconnected")
+    except Exception:
+        manager.disconnect(
+            username,
+            websocket
+        )
+

@@ -1,4 +1,3 @@
-
 import os
 
 import mysql.connector
@@ -29,11 +28,15 @@ def save_message(sender, receiver, content):
     cursor = conn.cursor()
 
     query = """
-        INSERT INTO messages (sender, receiver, content, created_at)
-        VALUES (%s, %s, %s, NOW())
+        INSERT INTO messages (sender, receiver, content, created_at, status)
+        VALUES (%s, %s, %s, NOW(), %s)
     """
 
-    cursor.execute(query, (sender, receiver, content))
+    cursor.execute(
+        query,
+        (sender, receiver, content, "SENT")
+    )
+
     conn.commit()
 
     message_id = cursor.lastrowid
@@ -49,20 +52,104 @@ def get_messages(user1, user2):
     cursor = conn.cursor(dictionary=True)
 
     query = """
-        SELECT id, sender, receiver, content, created_at
+        SELECT id, sender, receiver, content, status, created_at
         FROM messages
         WHERE (sender = %s AND receiver = %s)
            OR (sender = %s AND receiver = %s)
         ORDER BY created_at ASC, id ASC
     """
 
-    cursor.execute(query, (user1, user2, user2, user1))
+    cursor.execute(
+        query,
+        (user1, user2, user2, user1)
+    )
+
     messages = cursor.fetchall()
 
     cursor.close()
     conn.close()
 
     return messages
+
+
+def update_message_status(message_id, status, receiver):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        UPDATE messages
+        SET status = %s
+        WHERE id = %s
+          AND receiver = %s
+    """
+
+    cursor.execute(
+        query,
+        (status, message_id, receiver)
+    )
+
+    conn.commit()
+
+    updated = cursor.rowcount
+
+    cursor.close()
+    conn.close()
+
+    return updated
+
+
+def mark_message_as_read(message_id, receiver):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        UPDATE messages
+        SET status = 'READ'
+        WHERE id = %s
+          AND receiver = %s
+          AND status = 'DELIVERED'
+    """
+
+    cursor.execute(
+        query,
+        (message_id, receiver)
+    )
+
+    conn.commit()
+
+    updated = cursor.rowcount
+
+    cursor.close()
+    conn.close()
+
+    return updated
+
+
+def get_message_sender(message_id, receiver):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    query = """
+        SELECT sender
+        FROM messages
+        WHERE id = %s
+          AND receiver = %s
+    """
+
+    cursor.execute(
+        query,
+        (message_id, receiver)
+    )
+
+    message = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    if not message:
+        return None
+
+    return message["sender"]
 
 
 def create_user(username, email, password_hash):
@@ -74,7 +161,11 @@ def create_user(username, email, password_hash):
         VALUES (%s, %s, %s)
     """
 
-    cursor.execute(query, (username, email, password_hash))
+    cursor.execute(
+        query,
+        (username, email, password_hash)
+    )
+
     conn.commit()
 
     user_id = cursor.lastrowid
@@ -96,6 +187,7 @@ def find_user_by_email(email):
     """
 
     cursor.execute(query, (email,))
+
     user = cursor.fetchone()
 
     cursor.close()
@@ -115,12 +207,14 @@ def find_user_by_username(username):
     """
 
     cursor.execute(query, (username,))
+
     user = cursor.fetchone()
 
     cursor.close()
     conn.close()
 
     return user
+
 
 def get_all_users():
     conn = get_connection()
@@ -133,6 +227,7 @@ def get_all_users():
     """
 
     cursor.execute(query)
+
     users = cursor.fetchall()
 
     cursor.close()

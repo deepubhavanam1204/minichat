@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -22,6 +23,7 @@ type Message = {
   sender: string;
   receiver: string;
   content: string;
+  status: "SENT" | "DELIVERED" | "READ";
   created_at: string | null;
 };
 
@@ -35,6 +37,12 @@ type TypingMessage = {
   type: "typing";
   username: string;
   typing: boolean;
+};
+
+type MessageStatus = {
+  type: "message_status";
+  message_id: number;
+  status: "SENT" | "DELIVERED" | "READ";
 };
 
 export default function Home() {
@@ -119,7 +127,6 @@ export default function Home() {
 
     socket.onopen = () => {
       setConnected(true);
-      console.log("WebSocket connected");
     };
 
     socket.onmessage = (event) => {
@@ -159,7 +166,6 @@ export default function Home() {
       if (incomingData.type === "typing") {
         const typingMessage: TypingMessage = incomingData;
 
-        // Never show the current user as typing to themselves.
         if (typingMessage.username === user.username) {
           return;
         }
@@ -185,60 +191,98 @@ export default function Home() {
         return;
       }
 
-      const incomingMessage: Message = incomingData;
+      if (incomingData.type === "message_status") {
+        const statusMessage: MessageStatus = incomingData;
 
-      const selected = selectedUserRef.current;
+        setMessages((previousMessages) =>
+          previousMessages.map((msg) =>
+            msg.id === statusMessage.message_id
+              ? {
+                  ...msg,
+                  status: statusMessage.status,
+                }
+              : msg
+          )
+        );
 
-      if (!selected) {
         return;
       }
 
-      const belongsToCurrentChat =
-        (incomingMessage.sender === user.username &&
-          incomingMessage.receiver === selected.username) ||
-        (incomingMessage.sender === selected.username &&
-          incomingMessage.receiver === user.username);
+      if (incomingData.type === "new_message") {
+        const incomingMessage: Message = incomingData;
 
-      if (!belongsToCurrentChat) {
+        if (incomingMessage.receiver === user.username) {
+          socket.send(
+            JSON.stringify({
+              type: "delivered",
+              message_id: incomingMessage.id,
+            })
+          );
+        }
+
+        const selected = selectedUserRef.current;
+
+        if (!selected) {
+          return;
+        }
+
+        const belongsToCurrentChat =
+          (incomingMessage.sender === user.username &&
+            incomingMessage.receiver === selected.username) ||
+          (incomingMessage.sender === selected.username &&
+            incomingMessage.receiver === user.username);
+
+        if (!belongsToCurrentChat) {
+          return;
+        }
+
+        setMessages((previousMessages) => {
+          const temporaryMessageIndex = previousMessages.findIndex(
+            (msg) =>
+              msg.id < 0 &&
+              msg.sender === incomingMessage.sender &&
+              msg.receiver === incomingMessage.receiver &&
+              msg.content === incomingMessage.content
+          );
+
+          if (temporaryMessageIndex !== -1) {
+            const updatedMessages = [...previousMessages];
+
+            updatedMessages[temporaryMessageIndex] = incomingMessage;
+
+            return updatedMessages;
+          }
+
+          const alreadyExists = previousMessages.some(
+            (msg) => msg.id === incomingMessage.id
+          );
+
+          if (alreadyExists) {
+            return previousMessages;
+          }
+
+          return [...previousMessages, incomingMessage];
+        });
+
+        if (incomingMessage.receiver === user.username) {
+          socket.send(
+            JSON.stringify({
+              type: "read",
+              message_id: incomingMessage.id,
+            })
+          );
+        }
+
         return;
       }
-
-      setMessages((previousMessages) => {
-        const temporaryMessageIndex = previousMessages.findIndex(
-          (msg) =>
-            msg.id < 0 &&
-            msg.sender === incomingMessage.sender &&
-            msg.receiver === incomingMessage.receiver &&
-            msg.content === incomingMessage.content
-        );
-
-        if (temporaryMessageIndex !== -1) {
-          const updatedMessages = [...previousMessages];
-
-          updatedMessages[temporaryMessageIndex] = incomingMessage;
-
-          return updatedMessages;
-        }
-
-        const alreadyExists = previousMessages.some(
-          (msg) => msg.id === incomingMessage.id
-        );
-
-        if (alreadyExists) {
-          return previousMessages;
-        }
-
-        return [...previousMessages, incomingMessage];
-      });
     };
 
     socket.onclose = () => {
       setConnected(false);
-      console.log("WebSocket disconnected");
     };
 
-    socket.onerror = (error) => {
-      console.error("WebSocket error:", error);
+    socket.onerror = () => {
+      setConnected(false);
     };
 
     return () => {
@@ -289,6 +333,34 @@ export default function Home() {
         const data: Message[] = await response.json();
 
         setMessages(data);
+
+        const socket = socketRef.current;
+
+        if (
+          socket &&
+          socket.readyState === WebSocket.OPEN
+        ) {
+          for (const msg of data) {
+            if (
+              msg.receiver === loggedInUser.username &&
+              msg.status !== "READ"
+            ) {
+              socket.send(
+                JSON.stringify({
+                  type: "delivered",
+                  message_id: msg.id,
+                })
+              );
+
+              socket.send(
+                JSON.stringify({
+                  type: "read",
+                  message_id: msg.id,
+                })
+              );
+            }
+          }
+        }
       } catch (error) {
         console.error("Failed to load messages:", error);
       }
@@ -402,7 +474,6 @@ export default function Home() {
       !currentUser ||
       !selectedUser
     ) {
-      console.log("WebSocket is not connected");
       return;
     }
 
@@ -415,6 +486,7 @@ export default function Home() {
       sender: currentUser.username,
       receiver: selectedUser.username,
       content: messageContent,
+      status: "SENT",
       created_at: new Date().toISOString(),
     };
 
@@ -465,6 +537,18 @@ export default function Home() {
       minute: "2-digit",
       hour12: true,
     });
+  }
+
+  function getMessageStatus(msg: Message) {
+    if (msg.status === "READ") {
+      return "✓✓ Read";
+    }
+
+    if (msg.status === "DELIVERED") {
+      return "✓✓";
+    }
+
+    return "✓";
   }
 
   return (
@@ -603,13 +687,19 @@ export default function Home() {
                         <div>{msg.content}</div>
 
                         <div
-                          className={`mt-1 text-xs ${
+                          className={`mt-1 flex items-center justify-end gap-1 text-xs ${
                             isMine
                               ? "text-blue-100"
                               : "text-gray-500"
                           }`}
                         >
-                          {formatTime(msg.created_at)}
+                          <span>{formatTime(msg.created_at)}</span>
+
+                          {isMine && (
+                            <span className="font-bold">
+                              {getMessageStatus(msg)}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -668,3 +758,4 @@ export default function Home() {
     </main>
   );
 }
+
