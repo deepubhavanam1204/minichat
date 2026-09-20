@@ -19,6 +19,7 @@ type ChatUser = {
   last_message: string | null;
   last_message_time: string | null;
   last_message_sender: string | null;
+  last_message_status: "SENT" | "DELIVERED" | "READ" | null;
 };
 
 type Message = {
@@ -63,17 +64,23 @@ export default function Home() {
   const [searchText, setSearchText] = useState("");
 
   const socketRef = useRef<WebSocket | null>(null);
+
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+
   const reconnectingRef = useRef(false);
   const manuallyClosedRef = useRef(false);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const shouldScrollToBottom = useRef(true);
+
   const selectedUserRef = useRef<ChatUser | null>(null);
+
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
+
+  const lastOutgoingMessageIdsRef = useRef<Record<string, number>>({});
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
   const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
@@ -272,11 +279,39 @@ export default function Home() {
             )
           );
 
+          const lastMessageOwner = Object.keys(
+            lastOutgoingMessageIdsRef.current
+          ).find(
+            (username) =>
+              lastOutgoingMessageIdsRef.current[username] ===
+              statusMessage.message_id
+          );
+
+          if (lastMessageOwner) {
+            setUsers((previousUsers) =>
+              previousUsers.map((chatUser) =>
+                chatUser.username === lastMessageOwner
+                  ? {
+                      ...chatUser,
+                      last_message_status:
+                        statusMessage.status,
+                    }
+                  : chatUser
+              )
+            );
+          }
+
           return;
         }
 
         if (incomingData.type === "new_message") {
           const incomingMessage: Message = incomingData;
+
+          if (incomingMessage.sender === user.username) {
+            lastOutgoingMessageIdsRef.current[
+              incomingMessage.receiver
+            ] = incomingMessage.id;
+          }
 
           if (incomingMessage.receiver === user.username) {
             if (socket.readyState === WebSocket.OPEN) {
@@ -355,6 +390,7 @@ export default function Home() {
         }
 
         reconnectingRef.current = false;
+
         setConnected(false);
 
         scheduleReconnect();
@@ -393,19 +429,21 @@ export default function Home() {
     }
 
     function handleOnline() {
-      if (navigator.onLine) {
-        const socket = socketRef.current;
+      if (!navigator.onLine) {
+        return;
+      }
 
-        if (
-          !socket ||
-          (
-            socket.readyState !== WebSocket.OPEN &&
-            socket.readyState !== WebSocket.CONNECTING
-          )
-        ) {
-          clearReconnectTimeout();
-          connectWebSocket();
-        }
+      const socket = socketRef.current;
+
+      if (
+        !socket ||
+        (
+          socket.readyState !== WebSocket.OPEN &&
+          socket.readyState !== WebSocket.CONNECTING
+        )
+      ) {
+        clearReconnectTimeout();
+        connectWebSocket();
       }
     }
 
@@ -434,6 +472,7 @@ export default function Home() {
       }
 
       reconnectingRef.current = false;
+
       setConnected(false);
     };
   }, [API_URL, WS_URL, router]);
@@ -539,6 +578,10 @@ export default function Home() {
               last_message: incomingMessage.content,
               last_message_time: incomingMessage.created_at,
               last_message_sender: incomingMessage.sender,
+              last_message_status:
+                incomingMessage.sender === currentUser?.username
+                  ? incomingMessage.status
+                  : null,
             }
           : user
       );
@@ -795,8 +838,34 @@ export default function Home() {
     return "✓";
   }
 
+  function getLastMessageStatus(user: ChatUser) {
+    if (
+      user.last_message_sender !== currentUser?.username ||
+      !user.last_message_status
+    ) {
+      return null;
+    }
+
+    if (
+      user.last_message_status === "DELIVERED" ||
+      user.last_message_status === "READ"
+    ) {
+      return "✓✓";
+    }
+
+    return "✓";
+  }
+
+  function isLastMessageRead(user: ChatUser) {
+    return (
+      user.last_message_sender === currentUser?.username &&
+      user.last_message_status === "READ"
+    );
+  }
+
   return (
     <main className="min-h-screen bg-gray-100 p-0 text-gray-900 md:p-6">
+
       <div className="mx-auto flex h-[100dvh] w-full overflow-hidden bg-white shadow-lg md:h-[90vh] md:max-w-6xl md:rounded-xl md:border">
 
         <div
@@ -806,6 +875,7 @@ export default function Home() {
         >
 
           <div className="border-b bg-gray-50 px-4 py-3">
+
             <div className="flex items-center justify-between">
 
               <div>
@@ -828,15 +898,18 @@ export default function Home() {
               </button>
 
             </div>
+
           </div>
 
           <div className="border-b p-3">
+
             <input
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
               placeholder="Search users..."
               className="w-full rounded-lg bg-gray-100 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
             />
+
           </div>
 
           <div className="flex-1 overflow-y-auto">
@@ -865,84 +938,110 @@ export default function Home() {
                     .toLowerCase()
                     .includes(searchText.toLowerCase())
                 )
-                .map((user) => (
+                .map((user) => {
 
-                  <button
-                    key={user.id}
-                    onClick={() => selectUser(user)}
-                    className={`flex w-full items-center gap-3 border-b px-4 py-4 text-left transition hover:bg-gray-50 ${
-                      selectedUser?.id === user.id
-                        ? "bg-blue-50"
-                        : "bg-white"
-                    }`}
-                  >
+                  const lastMessageStatus =
+                    getLastMessageStatus(user);
 
-                    <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gray-200 text-lg font-semibold">
+                  const lastMessageRead =
+                    isLastMessageRead(user);
 
-                      {user.username.charAt(0).toUpperCase()}
+                  return (
 
-                      <span
-                        className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white ${
-                          user.online
-                            ? "bg-green-500"
-                            : "bg-gray-400"
-                        }`}
-                      />
+                    <button
+                      key={user.id}
+                      onClick={() => selectUser(user)}
+                      className={`flex w-full items-center gap-3 border-b px-4 py-4 text-left transition hover:bg-gray-50 ${
+                        selectedUser?.id === user.id
+                          ? "bg-blue-50"
+                          : "bg-white"
+                      }`}
+                    >
 
-                    </div>
+                      <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gray-200 text-lg font-semibold">
 
-                    <div className="min-w-0 flex-1">
+                        {user.username.charAt(0).toUpperCase()}
 
-                      <div className="flex items-center justify-between gap-2">
-
-                        <span className="truncate font-semibold">
-                          {user.username}
-                        </span>
-
-                        {user.last_message_time && (
-                          <span className="shrink-0 text-xs text-gray-400">
-                            {formatTime(user.last_message_time)}
-                          </span>
-                        )}
+                        <span
+                          className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white ${
+                            user.online
+                              ? "bg-green-500"
+                              : "bg-gray-400"
+                          }`}
+                        />
 
                       </div>
 
-                      <div className="mt-1 flex items-center gap-1">
+                      <div className="min-w-0 flex-1">
 
-                        {typingUsers[user.username] ? (
+                        <div className="flex items-center justify-between gap-2">
 
-                          <span className="truncate text-sm font-medium text-blue-500">
-                            typing...
+                          <span className="truncate font-semibold">
+                            {user.username}
                           </span>
 
-                        ) : (
+                          {user.last_message_time && (
+                            <span className="shrink-0 text-xs text-gray-400">
+                              {formatTime(user.last_message_time)}
+                            </span>
+                          )}
 
-                          <span className="truncate text-sm text-gray-500">
+                        </div>
 
-                            {user.last_message_sender ===
-                              currentUser?.username && (
-                              <span className="mr-1">
-                                You:
+                        <div className="mt-1 flex items-center gap-1">
+
+                          {typingUsers[user.username] ? (
+
+                            <span className="truncate text-sm font-medium text-blue-500">
+                              typing...
+                            </span>
+
+                          ) : (
+
+                            <span className="flex min-w-0 items-center text-sm text-gray-500">
+
+                              {lastMessageStatus && (
+                                <span
+                                  className={`mr-1 shrink-0 font-bold ${
+                                    lastMessageRead
+                                      ? "text-blue-500"
+                                      : "text-gray-500"
+                                  }`}
+                                >
+                                  {lastMessageStatus}
+                                </span>
+                              )}
+
+                              {user.last_message_sender ===
+                                currentUser?.username && (
+                                <span className="mr-1 shrink-0">
+                                  You:
+                                </span>
+                              )}
+
+                              <span className="truncate">
+                                {formatLastMessage(
+                                  user.last_message
+                                )}
                               </span>
-                            )}
 
-                            {formatLastMessage(user.last_message)}
+                            </span>
 
-                          </span>
+                          )}
 
-                        )}
+                        </div>
 
                       </div>
 
-                    </div>
+                    </button>
 
-                  </button>
-
-                ))
+                  );
+                })
 
             )}
 
           </div>
+
         </div>
 
         <div
@@ -1188,6 +1287,7 @@ export default function Home() {
         </div>
 
       </div>
+
     </main>
   );
 }

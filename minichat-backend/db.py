@@ -1,3 +1,4 @@
+
 import os
 
 import mysql.connector
@@ -83,7 +84,8 @@ def get_last_messages_for_user(current_username):
             u.email,
             m.content AS last_message,
             m.created_at AS last_message_time,
-            m.sender AS last_message_sender
+            m.sender AS last_message_sender,
+            m.status AS last_message_status
         FROM users u
 
         LEFT JOIN messages m
@@ -191,10 +193,7 @@ def mark_message_as_read(message_id, receiver):
           AND status = 'DELIVERED'
     """
 
-    cursor.execute(
-        query,
-        (message_id, receiver)
-    )
+    cursor.execute(query, (message_id, receiver))
 
     conn.commit()
 
@@ -217,10 +216,7 @@ def get_message_sender(message_id, receiver):
           AND receiver = %s
     """
 
-    cursor.execute(
-        query,
-        (message_id, receiver)
-    )
+    cursor.execute(query, (message_id, receiver))
 
     message = cursor.fetchone()
 
@@ -315,3 +311,4 @@ def get_all_users():
     conn.close()
 
     return users
+
