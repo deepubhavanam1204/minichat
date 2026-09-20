@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -62,6 +63,12 @@ export default function Home() {
   const [searchText, setSearchText] = useState("");
 
   const socketRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const reconnectingRef = useRef(false);
+  const manuallyClosedRef = useRef(false);
+
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const shouldScrollToBottom = useRef(true);
   const selectedUserRef = useRef<ChatUser | null>(null);
@@ -91,6 +98,8 @@ export default function Home() {
       return;
     }
 
+    manuallyClosedRef.current = false;
+
     async function loadUsers() {
       try {
         const response = await fetch(`${API_URL}/users`, {
@@ -113,182 +122,318 @@ export default function Home() {
         const data: ChatUser[] = await response.json();
 
         setUsers(data);
-
-        // Intentionally do not select a user automatically.
       } catch (error) {
         console.error("Failed to load users:", error);
       }
     }
 
-    loadUsers();
+    function clearReconnectTimeout() {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    }
 
-    const socket = new WebSocket(
-      `${WS_URL}/ws/${user.username}?token=${encodeURIComponent(user.token)}`
-    );
-
-    socketRef.current = socket;
-
-    socket.onopen = () => {
-      setConnected(true);
-    };
-
-    socket.onmessage = (event) => {
-      const incomingData = JSON.parse(event.data);
-
-      if (incomingData.type === "presence") {
-        const presenceMessage: PresenceMessage = incomingData;
-
-        setUsers((previousUsers) =>
-          previousUsers.map((existingUser) =>
-            existingUser.username === presenceMessage.username
-              ? {
-                  ...existingUser,
-                  online: presenceMessage.online,
-                }
-              : existingUser
-          )
-        );
-
-        setSelectedUser((previousSelectedUser) => {
-          if (
-            previousSelectedUser &&
-            previousSelectedUser.username === presenceMessage.username
-          ) {
-            return {
-              ...previousSelectedUser,
-              online: presenceMessage.online,
-            };
-          }
-
-          return previousSelectedUser;
-        });
-
+    function scheduleReconnect() {
+      if (manuallyClosedRef.current) {
         return;
       }
 
-      if (incomingData.type === "typing") {
-        const typingMessage: TypingMessage = incomingData;
+      if (document.visibilityState !== "visible") {
+        return;
+      }
 
-        if (typingMessage.username === user.username) {
+      if (reconnectTimeoutRef.current) {
+        return;
+      }
+
+      reconnectTimeoutRef.current = setTimeout(() => {
+        reconnectTimeoutRef.current = null;
+        connectWebSocket();
+      }, 1000);
+    }
+
+    function connectWebSocket() {
+      if (manuallyClosedRef.current) {
+        return;
+      }
+
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      if (
+        socketRef.current &&
+        (
+          socketRef.current.readyState === WebSocket.OPEN ||
+          socketRef.current.readyState === WebSocket.CONNECTING
+        )
+      ) {
+        return;
+      }
+
+      if (reconnectingRef.current) {
+        return;
+      }
+
+      reconnectingRef.current = true;
+
+      const socket = new WebSocket(
+        `${WS_URL}/ws/${user.username}?token=${encodeURIComponent(
+          user.token
+        )}`
+      );
+
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        reconnectingRef.current = false;
+        clearReconnectTimeout();
+
+        setConnected(true);
+
+        loadUsers();
+      };
+
+      socket.onmessage = (event) => {
+        const incomingData = JSON.parse(event.data);
+
+        if (incomingData.type === "presence") {
+          const presenceMessage: PresenceMessage = incomingData;
+
+          setUsers((previousUsers) =>
+            previousUsers.map((existingUser) =>
+              existingUser.username === presenceMessage.username
+                ? {
+                    ...existingUser,
+                    online: presenceMessage.online,
+                  }
+                : existingUser
+            )
+          );
+
+          setSelectedUser((previousSelectedUser) => {
+            if (
+              previousSelectedUser &&
+              previousSelectedUser.username ===
+                presenceMessage.username
+            ) {
+              return {
+                ...previousSelectedUser,
+                online: presenceMessage.online,
+              };
+            }
+
+            return previousSelectedUser;
+          });
+
           return;
         }
 
-        setTypingUsers((previousTypingUsers) => ({
-          ...previousTypingUsers,
-          [typingMessage.username]: typingMessage.typing,
-        }));
+        if (incomingData.type === "typing") {
+          const typingMessage: TypingMessage = incomingData;
 
-        const selected = selectedUserRef.current;
-
-        if (
-          selected &&
-          typingMessage.username === selected.username
-        ) {
-          if (typingMessage.typing) {
-            setTypingUser(typingMessage.username);
-          } else {
-            setTypingUser(null);
+          if (typingMessage.username === user.username) {
+            return;
           }
+
+          setTypingUsers((previousTypingUsers) => ({
+            ...previousTypingUsers,
+            [typingMessage.username]: typingMessage.typing,
+          }));
+
+          const selected = selectedUserRef.current;
+
+          if (
+            selected &&
+            typingMessage.username === selected.username
+          ) {
+            if (typingMessage.typing) {
+              setTypingUser(typingMessage.username);
+            } else {
+              setTypingUser(null);
+            }
+          }
+
+          return;
         }
 
-        return;
-      }
+        if (incomingData.type === "message_status") {
+          const statusMessage: MessageStatus = incomingData;
 
-      if (incomingData.type === "message_status") {
-        const statusMessage: MessageStatus = incomingData;
-
-        setMessages((previousMessages) =>
-          previousMessages.map((msg) =>
-            msg.id === statusMessage.message_id
-              ? {
-                  ...msg,
-                  status: statusMessage.status,
-                }
-              : msg
-          )
-        );
-
-        return;
-      }
-
-      if (incomingData.type === "new_message") {
-        const incomingMessage: Message = incomingData;
-
-        if (incomingMessage.receiver === user.username) {
-          socket.send(
-            JSON.stringify({
-              type: "delivered",
-              message_id: incomingMessage.id,
-            })
+          setMessages((previousMessages) =>
+            previousMessages.map((msg) =>
+              msg.id === statusMessage.message_id
+                ? {
+                    ...msg,
+                    status: statusMessage.status,
+                  }
+                : msg
+            )
           );
+
+          return;
         }
 
-        const selected = selectedUserRef.current;
+        if (incomingData.type === "new_message") {
+          const incomingMessage: Message = incomingData;
 
-        if (selected) {
-          const belongsToCurrentChat =
-            (incomingMessage.sender === user.username &&
-              incomingMessage.receiver === selected.username) ||
-            (incomingMessage.sender === selected.username &&
-              incomingMessage.receiver === user.username);
-
-          if (belongsToCurrentChat) {
-            setMessages((previousMessages) => {
-              const temporaryMessageIndex = previousMessages.findIndex(
-                (msg) =>
-                  msg.id < 0 &&
-                  msg.sender === incomingMessage.sender &&
-                  msg.receiver === incomingMessage.receiver &&
-                  msg.content === incomingMessage.content
-              );
-
-              if (temporaryMessageIndex !== -1) {
-                const updatedMessages = [...previousMessages];
-
-                updatedMessages[temporaryMessageIndex] = incomingMessage;
-
-                return updatedMessages;
-              }
-
-              const alreadyExists = previousMessages.some(
-                (msg) => msg.id === incomingMessage.id
-              );
-
-              if (alreadyExists) {
-                return previousMessages;
-              }
-
-              return [...previousMessages, incomingMessage];
-            });
-
-            if (incomingMessage.receiver === user.username) {
+          if (incomingMessage.receiver === user.username) {
+            if (socket.readyState === WebSocket.OPEN) {
               socket.send(
                 JSON.stringify({
-                  type: "read",
+                  type: "delivered",
                   message_id: incomingMessage.id,
                 })
               );
             }
           }
+
+          const selected = selectedUserRef.current;
+
+          if (selected) {
+            const belongsToCurrentChat =
+              (incomingMessage.sender === user.username &&
+                incomingMessage.receiver === selected.username) ||
+              (incomingMessage.sender === selected.username &&
+                incomingMessage.receiver === user.username);
+
+            if (belongsToCurrentChat) {
+              setMessages((previousMessages) => {
+                const temporaryMessageIndex =
+                  previousMessages.findIndex(
+                    (msg) =>
+                      msg.id < 0 &&
+                      msg.sender === incomingMessage.sender &&
+                      msg.receiver === incomingMessage.receiver &&
+                      msg.content === incomingMessage.content
+                  );
+
+                if (temporaryMessageIndex !== -1) {
+                  const updatedMessages = [...previousMessages];
+
+                  updatedMessages[temporaryMessageIndex] =
+                    incomingMessage;
+
+                  return updatedMessages;
+                }
+
+                const alreadyExists = previousMessages.some(
+                  (msg) => msg.id === incomingMessage.id
+                );
+
+                if (alreadyExists) {
+                  return previousMessages;
+                }
+
+                return [...previousMessages, incomingMessage];
+              });
+
+              if (
+                incomingMessage.receiver === user.username &&
+                socket.readyState === WebSocket.OPEN
+              ) {
+                socket.send(
+                  JSON.stringify({
+                    type: "read",
+                    message_id: incomingMessage.id,
+                  })
+                );
+              }
+            }
+          }
+
+          updateLastMessagePreview(incomingMessage);
+
+          return;
+        }
+      };
+
+      socket.onclose = () => {
+        if (socketRef.current === socket) {
+          socketRef.current = null;
         }
 
-        updateLastMessagePreview(incomingMessage);
+        reconnectingRef.current = false;
+        setConnected(false);
 
-        return;
+        scheduleReconnect();
+      };
+
+      socket.onerror = () => {
+        setConnected(false);
+
+        if (socketRef.current === socket) {
+          socket.close();
+        }
+      };
+    }
+
+    loadUsers();
+    connectWebSocket();
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        const socket = socketRef.current;
+
+        if (
+          !socket ||
+          (
+            socket.readyState !== WebSocket.OPEN &&
+            socket.readyState !== WebSocket.CONNECTING
+          )
+        ) {
+          clearReconnectTimeout();
+          connectWebSocket();
+        } else if (socket.readyState === WebSocket.OPEN) {
+          setConnected(true);
+          loadUsers();
+        }
       }
-    };
+    }
 
-    socket.onclose = () => {
-      setConnected(false);
-    };
+    function handleOnline() {
+      if (navigator.onLine) {
+        const socket = socketRef.current;
 
-    socket.onerror = () => {
-      setConnected(false);
-    };
+        if (
+          !socket ||
+          (
+            socket.readyState !== WebSocket.OPEN &&
+            socket.readyState !== WebSocket.CONNECTING
+          )
+        ) {
+          clearReconnectTimeout();
+          connectWebSocket();
+        }
+      }
+    }
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange
+    );
+
+    window.addEventListener("online", handleOnline);
 
     return () => {
-      socket.close();
-      socketRef.current = null;
+      manuallyClosedRef.current = true;
+
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange
+      );
+
+      window.removeEventListener("online", handleOnline);
+
+      clearReconnectTimeout();
+
+      if (socketRef.current) {
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+
+      reconnectingRef.current = false;
       setConnected(false);
     };
   }, [API_URL, WS_URL, router]);
@@ -322,7 +467,9 @@ export default function Home() {
         }
 
         if (response.status === 403) {
-          console.error("You are not allowed to access these messages");
+          console.error(
+            "You are not allowed to access these messages"
+          );
           return;
         }
 
@@ -563,7 +710,7 @@ export default function Home() {
   function logout() {
     stopTyping();
 
-    socketRef.current?.close();
+    manuallyCloseSocket();
 
     localStorage.removeItem("user");
 
@@ -577,6 +724,20 @@ export default function Home() {
     setShowChat(false);
 
     router.push("/login");
+  }
+
+  function manuallyCloseSocket() {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    manuallyClosedRef.current = true;
+
+    if (socketRef.current) {
+      socketRef.current.close();
+      socketRef.current = null;
+    }
   }
 
   function formatTime(createdAt: string | null) {
@@ -636,10 +797,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gray-100 p-0 text-gray-900 md:p-6">
-
       <div className="mx-auto flex h-[100dvh] w-full overflow-hidden bg-white shadow-lg md:h-[90vh] md:max-w-6xl md:rounded-xl md:border">
-
-        {/* CHAT LIST */}
 
         <div
           className={`${
@@ -647,10 +805,7 @@ export default function Home() {
           } w-full flex-col border-r md:w-[360px]`}
         >
 
-          {/* LEFT HEADER */}
-
           <div className="border-b bg-gray-50 px-4 py-3">
-
             <div className="flex items-center justify-between">
 
               <div>
@@ -673,23 +828,16 @@ export default function Home() {
               </button>
 
             </div>
-
           </div>
 
-          {/* SEARCH */}
-
           <div className="border-b p-3">
-
             <input
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
               placeholder="Search users..."
               className="w-full rounded-lg bg-gray-100 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
             />
-
           </div>
-
-          {/* USER LIST */}
 
           <div className="flex-1 overflow-y-auto">
 
@@ -729,8 +877,6 @@ export default function Home() {
                     }`}
                   >
 
-                    {/* AVATAR */}
-
                     <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gray-200 text-lg font-semibold">
 
                       {user.username.charAt(0).toUpperCase()}
@@ -744,8 +890,6 @@ export default function Home() {
                       />
 
                     </div>
-
-                    {/* CHAT INFO */}
 
                     <div className="min-w-0 flex-1">
 
@@ -774,13 +918,16 @@ export default function Home() {
                         ) : (
 
                           <span className="truncate text-sm text-gray-500">
-                            {user.last_message_sender === currentUser?.username && (
+
+                            {user.last_message_sender ===
+                              currentUser?.username && (
                               <span className="mr-1">
                                 You:
                               </span>
                             )}
 
                             {formatLastMessage(user.last_message)}
+
                           </span>
 
                         )}
@@ -796,19 +943,13 @@ export default function Home() {
             )}
 
           </div>
-
         </div>
-
-
-        {/* CHAT AREA */}
 
         <div
           className={`${
             showChat ? "flex" : "hidden md:flex"
           } min-w-0 flex-1 flex-col`}
         >
-
-          {/* CHAT HEADER */}
 
           <div className="border-b bg-gray-50 px-3 py-3 md:px-4">
 
@@ -871,7 +1012,6 @@ export default function Home() {
 
               </div>
 
-
               <div className="flex shrink-0 items-center gap-2">
 
                 <span
@@ -896,9 +1036,6 @@ export default function Home() {
             </div>
 
           </div>
-
-
-          {/* MESSAGES */}
 
           <div
             className="flex-1 overflow-y-auto bg-[#efeae2] p-3 md:p-5"
@@ -999,9 +1136,6 @@ export default function Home() {
 
           </div>
 
-
-          {/* MESSAGE INPUT */}
-
           {selectedUser && (
 
             <div className="border-t bg-gray-50 p-3 md:p-4">
@@ -1054,7 +1188,7 @@ export default function Home() {
         </div>
 
       </div>
-
     </main>
   );
 }
+
