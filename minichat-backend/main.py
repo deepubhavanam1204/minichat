@@ -1,4 +1,3 @@
-
 from datetime import datetime, timedelta
 
 import bcrypt
@@ -20,7 +19,7 @@ from db import (
     create_user,
     find_user_by_email,
     find_user_by_username,
-    get_all_users,
+    get_last_messages_for_user,
     get_message_sender,
     get_messages,
     mark_message_as_read,
@@ -165,7 +164,9 @@ def health():
 
 @app.get("/users")
 def users(current_user: dict = Depends(get_current_user)):
-    all_users = get_all_users()
+    all_users = get_last_messages_for_user(
+        current_user["username"]
+    )
 
     return [
         {
@@ -173,7 +174,6 @@ def users(current_user: dict = Depends(get_current_user)):
             "online": user["username"] in online_users
         }
         for user in all_users
-        if user["username"] != current_user["username"]
     ]
 
 
@@ -437,4 +437,3 @@ async def websocket_endpoint(
             username,
             websocket
         )
-

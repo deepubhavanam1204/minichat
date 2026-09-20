@@ -72,6 +72,87 @@ def get_messages(user1, user2):
     return messages
 
 
+def get_last_messages_for_user(current_username):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    query = """
+        SELECT
+            u.id,
+            u.username,
+            u.email,
+            m.content AS last_message,
+            m.created_at AS last_message_time,
+            m.sender AS last_message_sender
+        FROM users u
+
+        LEFT JOIN messages m
+            ON (
+                (
+                    m.sender = %s
+                    AND m.receiver = u.username
+                )
+                OR
+                (
+                    m.sender = u.username
+                    AND m.receiver = %s
+                )
+            )
+
+        WHERE u.username != %s
+
+        AND NOT EXISTS (
+            SELECT 1
+            FROM messages newer
+            WHERE
+                (
+                    (
+                        newer.sender = %s
+                        AND newer.receiver = u.username
+                    )
+                    OR
+                    (
+                        newer.sender = u.username
+                        AND newer.receiver = %s
+                    )
+                )
+                AND (
+                    newer.created_at > m.created_at
+                    OR (
+                        newer.created_at = m.created_at
+                        AND newer.id > m.id
+                    )
+                )
+        )
+
+        ORDER BY
+            CASE
+                WHEN m.created_at IS NULL THEN 1
+                ELSE 0
+            END,
+            m.created_at DESC,
+            m.id DESC
+    """
+
+    cursor.execute(
+        query,
+        (
+            current_username,
+            current_username,
+            current_username,
+            current_username,
+            current_username
+        )
+    )
+
+    users = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return users
+
+
 def update_message_status(message_id, status, receiver):
     conn = get_connection()
     cursor = conn.cursor()

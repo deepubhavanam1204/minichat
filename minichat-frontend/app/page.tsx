@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -16,6 +15,9 @@ type ChatUser = {
   username: string;
   email: string;
   online: boolean;
+  last_message: string | null;
+  last_message_time: string | null;
+  last_message_sender: string | null;
 };
 
 type Message = {
@@ -56,6 +58,8 @@ export default function Home() {
   const [connected, setConnected] = useState(false);
   const [typingUser, setTypingUser] = useState<string | null>(null);
   const [typingUsers, setTypingUsers] = useState<Record<string, boolean>>({});
+  const [showChat, setShowChat] = useState(false);
+  const [searchText, setSearchText] = useState("");
 
   const socketRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -80,6 +84,7 @@ export default function Home() {
     }
 
     const user: User = JSON.parse(storedUser);
+
     setCurrentUser(user);
 
     if (!API_URL || !WS_URL) {
@@ -109,9 +114,7 @@ export default function Home() {
 
         setUsers(data);
 
-        if (data.length > 0) {
-          setSelectedUser(data[0]);
-        }
+        // Intentionally do not select a user automatically.
       } catch (error) {
         console.error("Failed to load users:", error);
       }
@@ -222,56 +225,54 @@ export default function Home() {
 
         const selected = selectedUserRef.current;
 
-        if (!selected) {
-          return;
-        }
+        if (selected) {
+          const belongsToCurrentChat =
+            (incomingMessage.sender === user.username &&
+              incomingMessage.receiver === selected.username) ||
+            (incomingMessage.sender === selected.username &&
+              incomingMessage.receiver === user.username);
 
-        const belongsToCurrentChat =
-          (incomingMessage.sender === user.username &&
-            incomingMessage.receiver === selected.username) ||
-          (incomingMessage.sender === selected.username &&
-            incomingMessage.receiver === user.username);
+          if (belongsToCurrentChat) {
+            setMessages((previousMessages) => {
+              const temporaryMessageIndex = previousMessages.findIndex(
+                (msg) =>
+                  msg.id < 0 &&
+                  msg.sender === incomingMessage.sender &&
+                  msg.receiver === incomingMessage.receiver &&
+                  msg.content === incomingMessage.content
+              );
 
-        if (!belongsToCurrentChat) {
-          return;
-        }
+              if (temporaryMessageIndex !== -1) {
+                const updatedMessages = [...previousMessages];
 
-        setMessages((previousMessages) => {
-          const temporaryMessageIndex = previousMessages.findIndex(
-            (msg) =>
-              msg.id < 0 &&
-              msg.sender === incomingMessage.sender &&
-              msg.receiver === incomingMessage.receiver &&
-              msg.content === incomingMessage.content
-          );
+                updatedMessages[temporaryMessageIndex] = incomingMessage;
 
-          if (temporaryMessageIndex !== -1) {
-            const updatedMessages = [...previousMessages];
+                return updatedMessages;
+              }
 
-            updatedMessages[temporaryMessageIndex] = incomingMessage;
+              const alreadyExists = previousMessages.some(
+                (msg) => msg.id === incomingMessage.id
+              );
 
-            return updatedMessages;
+              if (alreadyExists) {
+                return previousMessages;
+              }
+
+              return [...previousMessages, incomingMessage];
+            });
+
+            if (incomingMessage.receiver === user.username) {
+              socket.send(
+                JSON.stringify({
+                  type: "read",
+                  message_id: incomingMessage.id,
+                })
+              );
+            }
           }
-
-          const alreadyExists = previousMessages.some(
-            (msg) => msg.id === incomingMessage.id
-          );
-
-          if (alreadyExists) {
-            return previousMessages;
-          }
-
-          return [...previousMessages, incomingMessage];
-        });
-
-        if (incomingMessage.receiver === user.username) {
-          socket.send(
-            JSON.stringify({
-              type: "read",
-              message_id: incomingMessage.id,
-            })
-          );
         }
+
+        updateLastMessagePreview(incomingMessage);
 
         return;
       }
@@ -377,6 +378,45 @@ export default function Home() {
     }
   }, [messages]);
 
+  function updateLastMessagePreview(incomingMessage: Message) {
+    const otherUsername =
+      incomingMessage.sender === currentUser?.username
+        ? incomingMessage.receiver
+        : incomingMessage.sender;
+
+    setUsers((previousUsers) => {
+      const updatedUsers = previousUsers.map((user) =>
+        user.username === otherUsername
+          ? {
+              ...user,
+              last_message: incomingMessage.content,
+              last_message_time: incomingMessage.created_at,
+              last_message_sender: incomingMessage.sender,
+            }
+          : user
+      );
+
+      return updatedUsers.sort((a, b) => {
+        if (!a.last_message_time && !b.last_message_time) {
+          return a.username.localeCompare(b.username);
+        }
+
+        if (!a.last_message_time) {
+          return 1;
+        }
+
+        if (!b.last_message_time) {
+          return -1;
+        }
+
+        const timeA = new Date(a.last_message_time).getTime();
+        const timeB = new Date(b.last_message_time).getTime();
+
+        return timeB - timeA;
+      });
+    });
+  }
+
   function handleScroll(event: React.UIEvent<HTMLDivElement>) {
     const element = event.currentTarget;
 
@@ -394,6 +434,19 @@ export default function Home() {
     }
 
     setSelectedUser(user);
+    setMessages([]);
+    setTypingUser(null);
+    shouldScrollToBottom.current = true;
+    setShowChat(true);
+  }
+
+  function goBackToUsers() {
+    if (isTypingRef.current) {
+      stopTyping();
+    }
+
+    setShowChat(false);
+    setSelectedUser(null);
     setMessages([]);
     setTypingUser(null);
     shouldScrollToBottom.current = true;
@@ -495,6 +548,8 @@ export default function Home() {
       temporaryMessage,
     ]);
 
+    updateLastMessagePreview(temporaryMessage);
+
     const chatMessage = {
       receiver: selectedUser.username,
       content: messageContent,
@@ -519,6 +574,7 @@ export default function Home() {
     setTypingUser(null);
     setTypingUsers({});
     setConnected(false);
+    setShowChat(false);
 
     router.push("/login");
   }
@@ -532,16 +588,43 @@ export default function Home() {
       ? createdAt
       : `${createdAt}Z`;
 
-    return new Date(utcDate).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
+    const date = new Date(utcDate);
+    const now = new Date();
+
+    const sameDay =
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() === now.getDate();
+
+    if (sameDay) {
+      return date.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+    }
+
+    return date.toLocaleDateString([], {
+      day: "2-digit",
+      month: "2-digit",
     });
+  }
+
+  function formatLastMessage(message: string | null) {
+    if (!message) {
+      return "No messages yet";
+    }
+
+    if (message.length > 38) {
+      return `${message.substring(0, 38)}...`;
+    }
+
+    return message;
   }
 
   function getMessageStatus(msg: Message) {
     if (msg.status === "READ") {
-      return "✓✓ Read";
+      return "✓✓";
     }
 
     if (msg.status === "DELIVERED") {
@@ -552,82 +635,247 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-100 p-4 text-gray-900">
-      <div className="mx-auto flex h-[90vh] max-w-5xl overflow-hidden rounded-xl border-2 border-black bg-white shadow-lg">
+    <main className="min-h-screen bg-gray-100 p-0 text-gray-900 md:p-6">
 
-        <div className="flex w-64 flex-col border-r">
-          <div className="border-b p-4">
-            <h1 className="text-2xl font-bold text-gray-900">
-              MiniChat
-            </h1>
+      <div className="mx-auto flex h-[100dvh] w-full overflow-hidden bg-white shadow-lg md:h-[90vh] md:max-w-6xl md:rounded-xl md:border">
 
-            {currentUser && (
-              <div className="mt-2 text-sm text-gray-600">
-                {currentUser.username}
-              </div>
-            )}
-          </div>
+        {/* CHAT LIST */}
 
-          <div className="flex-1 overflow-y-auto">
-            <div className="p-3 text-sm font-semibold text-gray-500">
-              USERS
-            </div>
+        <div
+          className={`${
+            showChat ? "hidden md:flex" : "flex"
+          } w-full flex-col border-r md:w-[360px]`}
+        >
 
-            {users.length === 0 ? (
-              <div className="px-4 text-sm text-gray-500">
-                No other users found
-              </div>
-            ) : (
-              users.map((user) => (
-                <button
-                  key={user.id}
-                  onClick={() => selectUser(user)}
-                  className={`w-full border-b px-4 py-3 text-left hover:bg-gray-100 ${
-                    selectedUser?.id === user.id
-                      ? "bg-blue-100"
-                      : "bg-white"
-                  }`}
-                >
-                  <div className="flex items-center gap-2 font-medium">
-                    <span>{user.online ? "🟢" : "⚪"}</span>
-                    <span>{user.username}</span>
-                  </div>
+          {/* LEFT HEADER */}
 
-                  {typingUsers[user.username] ? (
-                    <div className="text-xs font-medium text-blue-500">
-                      {user.username} is typing...
-                    </div>
-                  ) : (
-                    <div className="text-xs text-gray-500">
-                      {user.email}
-                    </div>
-                  )}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
+          <div className="border-b bg-gray-50 px-4 py-3">
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="border-b p-4">
             <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold">
-                  {selectedUser
-                    ? selectedUser.username
-                    : "Select a user"}
-                </h2>
 
-                {selectedUser && (
+              <div>
+                <h1 className="text-xl font-bold">
+                  MiniChat
+                </h1>
+
+                {currentUser && (
                   <div className="text-sm text-gray-500">
-                    {selectedUser.email}
+                    {currentUser.username}
                   </div>
                 )}
               </div>
 
-              <div className="flex items-center gap-4">
+              <button
+                onClick={logout}
+                className="rounded-lg bg-red-500 px-3 py-2 text-sm font-medium text-white hover:bg-red-600"
+              >
+                Logout
+              </button>
+
+            </div>
+
+          </div>
+
+          {/* SEARCH */}
+
+          <div className="border-b p-3">
+
+            <input
+              value={searchText}
+              onChange={(event) => setSearchText(event.target.value)}
+              placeholder="Search users..."
+              className="w-full rounded-lg bg-gray-100 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
+            />
+
+          </div>
+
+          {/* USER LIST */}
+
+          <div className="flex-1 overflow-y-auto">
+
+            {users.length > 0 && (
+              <div className="px-4 py-3 text-xs font-semibold tracking-wide text-gray-500">
+                CHATS
+              </div>
+            )}
+
+            {users.filter((user) =>
+              user.username
+                .toLowerCase()
+                .includes(searchText.toLowerCase())
+            ).length === 0 ? (
+
+              <div className="px-4 py-8 text-center text-sm text-gray-500">
+                No users found
+              </div>
+
+            ) : (
+
+              users
+                .filter((user) =>
+                  user.username
+                    .toLowerCase()
+                    .includes(searchText.toLowerCase())
+                )
+                .map((user) => (
+
+                  <button
+                    key={user.id}
+                    onClick={() => selectUser(user)}
+                    className={`flex w-full items-center gap-3 border-b px-4 py-4 text-left transition hover:bg-gray-50 ${
+                      selectedUser?.id === user.id
+                        ? "bg-blue-50"
+                        : "bg-white"
+                    }`}
+                  >
+
+                    {/* AVATAR */}
+
+                    <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gray-200 text-lg font-semibold">
+
+                      {user.username.charAt(0).toUpperCase()}
+
+                      <span
+                        className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white ${
+                          user.online
+                            ? "bg-green-500"
+                            : "bg-gray-400"
+                        }`}
+                      />
+
+                    </div>
+
+                    {/* CHAT INFO */}
+
+                    <div className="min-w-0 flex-1">
+
+                      <div className="flex items-center justify-between gap-2">
+
+                        <span className="truncate font-semibold">
+                          {user.username}
+                        </span>
+
+                        {user.last_message_time && (
+                          <span className="shrink-0 text-xs text-gray-400">
+                            {formatTime(user.last_message_time)}
+                          </span>
+                        )}
+
+                      </div>
+
+                      <div className="mt-1 flex items-center gap-1">
+
+                        {typingUsers[user.username] ? (
+
+                          <span className="truncate text-sm font-medium text-blue-500">
+                            typing...
+                          </span>
+
+                        ) : (
+
+                          <span className="truncate text-sm text-gray-500">
+                            {user.last_message_sender === currentUser?.username && (
+                              <span className="mr-1">
+                                You:
+                              </span>
+                            )}
+
+                            {formatLastMessage(user.last_message)}
+                          </span>
+
+                        )}
+
+                      </div>
+
+                    </div>
+
+                  </button>
+
+                ))
+
+            )}
+
+          </div>
+
+        </div>
+
+
+        {/* CHAT AREA */}
+
+        <div
+          className={`${
+            showChat ? "flex" : "hidden md:flex"
+          } min-w-0 flex-1 flex-col`}
+        >
+
+          {/* CHAT HEADER */}
+
+          <div className="border-b bg-gray-50 px-3 py-3 md:px-4">
+
+            <div className="flex items-center justify-between gap-3">
+
+              <div className="flex min-w-0 items-center gap-3">
+
+                <button
+                  onClick={goBackToUsers}
+                  className="rounded-lg px-2 py-1 text-xl hover:bg-gray-200 md:hidden"
+                >
+                  ←
+                </button>
+
+                {selectedUser ? (
+
+                  <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-200 font-semibold">
+
+                    {selectedUser.username.charAt(0).toUpperCase()}
+
+                    <span
+                      className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white ${
+                        selectedUser.online
+                          ? "bg-green-500"
+                          : "bg-gray-400"
+                      }`}
+                    />
+
+                  </div>
+
+                ) : null}
+
+                <div className="min-w-0">
+
+                  <h2 className="truncate text-lg font-semibold">
+                    {selectedUser
+                      ? selectedUser.username
+                      : "Select a chat"}
+                  </h2>
+
+                  {selectedUser ? (
+
+                    <div className="text-xs text-gray-500">
+                      {typingUser
+                        ? "typing..."
+                        : selectedUser.online
+                        ? "online"
+                        : "offline"}
+                    </div>
+
+                  ) : (
+
+                    <div className="text-xs text-gray-500">
+                      Choose a user to start chatting
+                    </div>
+
+                  )}
+
+                </div>
+
+              </div>
+
+
+              <div className="flex shrink-0 items-center gap-2">
+
                 <span
-                  className={`text-sm font-medium ${
+                  className={`hidden text-xs font-medium sm:inline ${
                     connected
                       ? "text-green-600"
                       : "text-red-600"
@@ -638,37 +886,60 @@ export default function Home() {
 
                 <button
                   onClick={logout}
-                  className="rounded-lg bg-red-500 px-4 py-2 font-medium text-white hover:bg-red-600"
+                  className="rounded-lg bg-red-500 px-3 py-2 text-sm font-medium text-white hover:bg-red-600"
                 >
                   Logout
                 </button>
+
               </div>
+
             </div>
+
           </div>
 
+
+          {/* MESSAGES */}
+
           <div
-            className="flex-1 overflow-y-auto p-4"
+            className="flex-1 overflow-y-auto bg-[#efeae2] p-3 md:p-5"
             onScroll={handleScroll}
           >
-            {!currentUser ? (
-              <div className="flex h-full items-center justify-center text-gray-500">
-                Please login first
+
+            {!selectedUser ? (
+
+              <div className="flex h-full flex-col items-center justify-center text-center">
+
+                <div className="mb-3 text-5xl">
+                  💬
+                </div>
+
+                <div className="text-lg font-semibold text-gray-600">
+                  MiniChat
+                </div>
+
+                <div className="mt-1 text-sm text-gray-500">
+                  Select a user from the left to start chatting
+                </div>
+
               </div>
-            ) : !selectedUser ? (
-              <div className="flex h-full items-center justify-center text-gray-500">
-                Select a user to start chatting
-              </div>
+
             ) : messages.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-gray-500">
+
+              <div className="flex h-full items-center justify-center text-center text-gray-500">
                 No messages yet
               </div>
+
             ) : (
-              <div className="flex flex-col gap-3">
+
+              <div className="flex flex-col gap-2">
+
                 {messages.map((msg) => {
+
                   const isMine =
-                    msg.sender === currentUser.username;
+                    msg.sender === currentUser?.username;
 
                   return (
+
                     <div
                       key={msg.id}
                       className={`flex ${
@@ -677,85 +948,113 @@ export default function Home() {
                           : "justify-start"
                       }`}
                     >
+
                       <div
-                        className={`max-w-[75%] rounded-xl px-4 py-2 ${
+                        className={`max-w-[85%] rounded-lg px-3 py-2 shadow-sm md:max-w-[70%] ${
                           isMine
-                            ? "bg-blue-500 text-white"
-                            : "bg-gray-200 text-gray-900"
+                            ? "bg-[#d9fdd3] text-gray-900"
+                            : "bg-white text-gray-900"
                         }`}
                       >
-                        <div>{msg.content}</div>
 
-                        <div
-                          className={`mt-1 flex items-center justify-end gap-1 text-xs ${
-                            isMine
-                              ? "text-blue-100"
-                              : "text-gray-500"
-                          }`}
-                        >
-                          <span>{formatTime(msg.created_at)}</span>
+                        <div className="break-words text-sm">
+                          {msg.content}
+                        </div>
+
+                        <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-gray-500">
+
+                          <span>
+                            {formatTime(msg.created_at)}
+                          </span>
 
                           {isMine && (
-                            <span className="font-bold">
+
+                            <span
+                              className={`font-bold ${
+                                msg.status === "READ"
+                                  ? "text-blue-500"
+                                  : "text-gray-500"
+                              }`}
+                            >
                               {getMessageStatus(msg)}
                             </span>
+
                           )}
+
                         </div>
+
                       </div>
+
                     </div>
+
                   );
+
                 })}
 
                 <div ref={messagesEndRef} />
+
               </div>
+
             )}
+
           </div>
 
-          <div className="border-t p-4">
-            {typingUser && selectedUser && (
-              <div className="mb-2 text-sm text-gray-500">
-                {typingUser} is typing...
+
+          {/* MESSAGE INPUT */}
+
+          {selectedUser && (
+
+            <div className="border-t bg-gray-50 p-3 md:p-4">
+
+              {typingUser && (
+
+                <div className="mb-2 text-xs text-gray-500">
+                  {typingUser} is typing...
+                </div>
+
+              )}
+
+              <div className="flex items-center gap-2">
+
+                <input
+                  value={message}
+                  onChange={(event) => {
+                    setMessage(event.target.value);
+
+                    if (event.target.value.trim() !== "") {
+                      startTyping();
+                    } else {
+                      stopTyping();
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      sendMessage();
+                    }
+                  }}
+                  disabled={!currentUser || !selectedUser}
+                  placeholder={`Message ${selectedUser.username}...`}
+                  className="min-w-0 flex-1 rounded-full border border-gray-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:bg-gray-100"
+                />
+
+                <button
+                  onClick={sendMessage}
+                  disabled={!currentUser || !selectedUser}
+                  className="shrink-0 rounded-full bg-blue-500 px-5 py-3 text-sm font-medium text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-400"
+                >
+                  Send
+                </button>
+
               </div>
-            )}
 
-            <div className="flex gap-2">
-              <input
-                value={message}
-                onChange={(event) => {
-                  setMessage(event.target.value);
-
-                  if (event.target.value.trim() !== "") {
-                    startTyping();
-                  } else {
-                    stopTyping();
-                  }
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    sendMessage();
-                  }
-                }}
-                disabled={!currentUser || !selectedUser}
-                placeholder={
-                  selectedUser
-                    ? `Message ${selectedUser.username}...`
-                    : "Select a user..."
-                }
-                className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-500 disabled:bg-gray-100"
-              />
-
-              <button
-                onClick={sendMessage}
-                disabled={!currentUser || !selectedUser}
-                className="rounded-lg bg-blue-500 px-5 py-2 font-medium text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-400"
-              >
-                Send
-              </button>
             </div>
-          </div>
+
+          )}
+
         </div>
+
       </div>
+
     </main>
   );
 }
-
