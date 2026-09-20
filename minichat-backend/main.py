@@ -301,6 +301,19 @@ async def websocket_endpoint(
 
             data = await websocket.receive_json()
 
+            if data.get("type") == "typing":
+
+                await manager.send_to_user(
+                    data["receiver"],
+                    {
+                        "type": "typing",
+                        "username": username,
+                        "typing": data["typing"]
+                    }
+                )
+
+                continue
+
             message_id = save_message(
                 username,
                 data["receiver"],
@@ -342,4 +355,3 @@ async def websocket_endpoint(
             )
 
         print(f"{username} disconnected")
-

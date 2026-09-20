@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -31,6 +32,12 @@ type PresenceMessage = {
   online: boolean;
 };
 
+type TypingMessage = {
+  type: "typing";
+  username: string;
+  typing: boolean;
+};
+
 export default function Home() {
   const router = useRouter();
 
@@ -40,11 +47,14 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [connected, setConnected] = useState(false);
+  const [typingUser, setTypingUser] = useState<string | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const shouldScrollToBottom = useRef(true);
   const selectedUserRef = useRef<ChatUser | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isTypingRef = useRef(false);
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
   const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
@@ -146,6 +156,25 @@ export default function Home() {
         return;
       }
 
+      if (incomingData.type === "typing") {
+        const typingMessage: TypingMessage = incomingData;
+
+        const selected = selectedUserRef.current;
+
+        if (
+          selected &&
+          typingMessage.username === selected.username
+        ) {
+          if (typingMessage.typing) {
+            setTypingUser(typingMessage.username);
+          } else {
+            setTypingUser(null);
+          }
+        }
+
+        return;
+      }
+
       const incomingMessage: Message = incomingData;
 
       const selected = selectedUserRef.current;
@@ -220,6 +249,7 @@ export default function Home() {
     async function loadMessages() {
       try {
         setMessages([]);
+        setTypingUser(null);
 
         const response = await fetch(
           `${API_URL}/messages/${loggedInUser.username}/${chatUser.username}`,
@@ -277,9 +307,76 @@ export default function Home() {
   }
 
   function selectUser(user: ChatUser) {
+    if (isTypingRef.current) {
+      stopTyping();
+    }
+
     setSelectedUser(user);
     setMessages([]);
+    setTypingUser(null);
     shouldScrollToBottom.current = true;
+  }
+
+  function startTyping() {
+    const socket = socketRef.current;
+
+    if (
+      !socket ||
+      socket.readyState !== WebSocket.OPEN ||
+      !currentUser ||
+      !selectedUser
+    ) {
+      return;
+    }
+
+    if (!isTypingRef.current) {
+      isTypingRef.current = true;
+
+      socket.send(
+        JSON.stringify({
+          type: "typing",
+          receiver: selectedUser.username,
+          typing: true,
+        })
+      );
+    }
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    typingTimeoutRef.current = setTimeout(() => {
+      stopTyping();
+    }, 1000);
+  }
+
+  function stopTyping() {
+    const socket = socketRef.current;
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
+    if (
+      !isTypingRef.current ||
+      !socket ||
+      socket.readyState !== WebSocket.OPEN ||
+      !selectedUser
+    ) {
+      isTypingRef.current = false;
+      return;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: "typing",
+        receiver: selectedUser.username,
+        typing: false,
+      })
+    );
+
+    isTypingRef.current = false;
   }
 
   function sendMessage() {
@@ -298,6 +395,8 @@ export default function Home() {
       console.log("WebSocket is not connected");
       return;
     }
+
+    stopTyping();
 
     const messageContent = message.trim();
 
@@ -325,6 +424,8 @@ export default function Home() {
   }
 
   function logout() {
+    stopTyping();
+
     socketRef.current?.close();
 
     localStorage.removeItem("user");
@@ -333,6 +434,7 @@ export default function Home() {
     setUsers([]);
     setSelectedUser(null);
     setMessages([]);
+    setTypingUser(null);
     setConnected(false);
 
     router.push("/login");
@@ -498,12 +600,25 @@ export default function Home() {
           </div>
 
           <div className="border-t p-4">
+
+            {typingUser && selectedUser && (
+              <div className="mb-2 text-sm text-gray-500">
+                {typingUser} is typing...
+              </div>
+            )}
+
             <div className="flex gap-2">
               <input
                 value={message}
-                onChange={(event) =>
-                  setMessage(event.target.value)
-                }
+                onChange={(event) => {
+                  setMessage(event.target.value);
+
+                  if (event.target.value.trim() !== "") {
+                    startTyping();
+                  } else {
+                    stopTyping();
+                  }
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     sendMessage();
@@ -532,3 +647,8 @@ export default function Home() {
     </main>
   );
 }
+
+
+
+
+
