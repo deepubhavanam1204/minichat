@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -48,6 +47,7 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [connected, setConnected] = useState(false);
   const [typingUser, setTypingUser] = useState<string | null>(null);
+  const [typingUsers, setTypingUsers] = useState<Record<string, boolean>>({});
 
   const socketRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -158,6 +158,16 @@ export default function Home() {
 
       if (incomingData.type === "typing") {
         const typingMessage: TypingMessage = incomingData;
+
+        // Never show the current user as typing to themselves.
+        if (typingMessage.username === user.username) {
+          return;
+        }
+
+        setTypingUsers((previousTypingUsers) => ({
+          ...previousTypingUsers,
+          [typingMessage.username]: typingMessage.typing,
+        }));
 
         const selected = selectedUserRef.current;
 
@@ -435,6 +445,7 @@ export default function Home() {
     setSelectedUser(null);
     setMessages([]);
     setTypingUser(null);
+    setTypingUsers({});
     setConnected(false);
 
     router.push("/login");
@@ -445,9 +456,14 @@ export default function Home() {
       return "";
     }
 
-    return new Date(createdAt).toLocaleTimeString([], {
+    const utcDate = createdAt.endsWith("Z")
+      ? createdAt
+      : `${createdAt}Z`;
+
+    return new Date(utcDate).toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
+      hour12: true,
     });
   }
 
@@ -493,9 +509,15 @@ export default function Home() {
                     <span>{user.username}</span>
                   </div>
 
-                  <div className="text-xs text-gray-500">
-                    {user.email}
-                  </div>
+                  {typingUsers[user.username] ? (
+                    <div className="text-xs font-medium text-blue-500">
+                      {user.username} is typing...
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">
+                      {user.email}
+                    </div>
+                  )}
                 </button>
               ))
             )}
@@ -600,7 +622,6 @@ export default function Home() {
           </div>
 
           <div className="border-t p-4">
-
             {typingUser && selectedUser && (
               <div className="mb-2 text-sm text-gray-500">
                 {typingUser} is typing...
@@ -647,8 +668,3 @@ export default function Home() {
     </main>
   );
 }
-
-
-
-
-
